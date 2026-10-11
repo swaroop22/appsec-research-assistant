@@ -15,6 +15,7 @@ from appsec_assistant.models import (
     SeverityLevel,
     ConfidenceLevel,
     FindingType,
+    FindingTier,
 )
 
 
@@ -49,6 +50,7 @@ class AccessControlAnalyzer(BaseAnalyzer):
         r'privileged\s+access\s+granted',
         r'delete\s+user',
         r'system\s+configuration',
+        r'admin\s+(?:portal|dashboard|console|panel)',
     ]
 
     @property
@@ -105,6 +107,7 @@ class AccessControlAnalyzer(BaseAnalyzer):
                             "but the backend may properly enforce session ownership on this object."
                         ),
                         finding_type=FindingType.HEURISTIC,
+                        finding_tier=FindingTier.HEURISTIC_INDICATOR,
                         target_url=url,
                         description=(
                             f"The endpoint references private user resources ('{resource_type}') via a sequential, "
@@ -160,7 +163,7 @@ class AccessControlAnalyzer(BaseAnalyzer):
             is_login_challenge = any(re.search(pat, body, re.IGNORECASE) for pat in self.LOGIN_INDICATORS)
             has_privileged_content = any(re.search(pat, body, re.IGNORECASE) for pat in self.ADMIN_CONTENT_INDICATORS)
 
-            if is_login_challenge and not has_privileged_content:
+            if is_login_challenge:
                 # Edge case / False positive prevention: It's an authentication portal, not unauthenticated admin access!
                 findings.append(
                     VulnerabilityFinding(
@@ -178,6 +181,7 @@ class AccessControlAnalyzer(BaseAnalyzer):
                             "bypass because credentials are required to proceed."
                         ),
                         finding_type=FindingType.HEURISTIC,
+                        finding_tier=FindingTier.OBSERVATION,
                         target_url=url,
                         description=(
                             f"The administrative route '{path}' responded with HTTP 200 OK containing an authentication "
@@ -200,8 +204,8 @@ class AccessControlAnalyzer(BaseAnalyzer):
                         references=["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"],
                     )
                 )
-            else:
-                # VERIFIED CRITICAL VULNERABILITY: Unauthenticated administrative data/controls exposed
+            elif has_privileged_content:
+                # VERIFIED CRITICAL VULNERABILITY: Unauthenticated administrative data/controls exposed with reproducible proof
                 findings.append(
                     VulnerabilityFinding(
                         finding_id="SEC-AC-002",
@@ -218,6 +222,7 @@ class AccessControlAnalyzer(BaseAnalyzer):
                             "HTTP GET request returned HTTP 200 with privileged content/telemetry without a login requirement."
                         ),
                         finding_type=FindingType.VERIFIED,
+                        finding_tier=FindingTier.INDEPENDENTLY_VERIFIED,
                         target_url=url,
                         description=(
                             f"The sensitive endpoint '{path}' returned HTTP 200 OK without any Authorization header "
@@ -237,6 +242,47 @@ class AccessControlAnalyzer(BaseAnalyzer):
                             "403 Forbidden) unless an explicit administrative session is validated."
                         ),
                         cwe_id="CWE-306",
+                        owasp_category="A01:2021-Broken Access Control",
+                        references=["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"],
+                    )
+                )
+            else:
+                # Neutral 200 on admin route: Path matches admin pattern but privileged data not proven
+                # Never infer CRITICAL severity from status code alone!
+                findings.append(
+                    VulnerabilityFinding(
+                        finding_id="SEC-AC-002-SUSPECT",
+                        title=f"Heuristic Indicator: Accessible Route on Administrative Prefix ('{path}')",
+                        category="Broken Access Control",
+                        severity=SeverityLevel.LOW,
+                        priority_rationale=(
+                            "Assigned LOW severity and HEURISTIC confidence because the endpoint matches an administrative "
+                            "path prefix and returned HTTP 200 OK, but no privileged controls or data were verified in response."
+                        ),
+                        confidence=ConfidenceLevel.HEURISTIC,
+                        confidence_explanation=(
+                            "Confidence is HEURISTIC: Critical severity is not inferred from status code 200 alone. "
+                            "The response body lacks explicit privileged administrative data or management controls."
+                        ),
+                        finding_type=FindingType.HEURISTIC,
+                        finding_tier=FindingTier.HEURISTIC_INDICATOR,
+                        target_url=url,
+                        description=(
+                            f"The route '{path}' begins with an administrative prefix and responded with HTTP 200 OK, "
+                            "but does not display obvious administrative management controls in the response body."
+                        ),
+                        impact=(
+                            "May expose non-sensitive administrative documentation or empty views. "
+                            "Requires manual authenticated differential testing to determine actual impact."
+                        ),
+                        evidence=(
+                            f"GET {path} returned HTTP 200 OK without credentials, but lacks privileged content indicators. "
+                            f"Response snippet: {body[:200]}..."
+                        ),
+                        remediation=(
+                            "Audit route authorization policies to ensure all routes beneath /admin require authentication."
+                        ),
+                        cwe_id="CWE-284",
                         owasp_category="A01:2021-Broken Access Control",
                         references=["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"],
                     )
@@ -272,6 +318,7 @@ class AccessControlAnalyzer(BaseAnalyzer):
                             "observed in the server response body."
                         ),
                         finding_type=FindingType.VERIFIED,
+                        finding_tier=FindingTier.INDEPENDENTLY_VERIFIED,
                         target_url=url,
                         description=(
                             f"The server response includes sensitive stack trace or error strings ('{indicator}'). "

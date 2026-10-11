@@ -18,12 +18,17 @@ class CSVReporter:
         "confidence",
         "confidence_explanation",
         "finding_type",
+        "finding_tier",
         "title",
         "category",
         "cwe_id",
         "owasp_category",
         "target_url",
         "affected_urls",
+        "human_reviewed",
+        "reviewed_by",
+        "reproduction_steps",
+        "sanitized_evidence",
         "description",
         "impact",
         "remediation",
@@ -39,6 +44,7 @@ class CSVReporter:
         writer.writeheader()
 
         for f in findings:
+            repro_steps_str = "; ".join(getattr(f, "reproduction_steps", []))
             writer.writerow({
                 "finding_id": f.finding_id,
                 "severity": f.severity.value,
@@ -46,12 +52,17 @@ class CSVReporter:
                 "confidence": f.confidence.value,
                 "confidence_explanation": f.confidence_explanation,
                 "finding_type": f.finding_type.value,
+                "finding_tier": f.finding_tier.value if hasattr(f, "finding_tier") else "SUSPECTED_VULNERABILITY",
                 "title": f.title,
                 "category": f.category,
                 "cwe_id": f.cwe_id or "N/A",
                 "owasp_category": f.owasp_category or "N/A",
                 "target_url": f.target_url,
                 "affected_urls": "; ".join(f.affected_urls) if f.affected_urls else f.target_url,
+                "human_reviewed": "YES" if getattr(f, "human_reviewed", False) else "NO",
+                "reviewed_by": getattr(f, "reviewed_by", "") or "N/A",
+                "reproduction_steps": repro_steps_str,
+                "sanitized_evidence": getattr(f, "sanitized_evidence", "") or f.evidence,
                 "description": f.description,
                 "impact": f.impact,
                 "remediation": f.remediation,

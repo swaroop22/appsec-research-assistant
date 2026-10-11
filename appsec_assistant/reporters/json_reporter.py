@@ -19,11 +19,15 @@ class JSONReporter:
         target_url: str,
         audit_name: str = "Local Web Application Security Audit",
     ) -> str:
+        reviewed_count = sum(1 for f in findings if getattr(f, "human_reviewed", False))
         report_data = {
             "audit_name": audit_name,
             "target_url": target_url,
             "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
             "total_findings": len(findings),
+            "human_reviewed_count": reviewed_count,
+            "human_review_complete": (reviewed_count == len(findings) and len(findings) > 0),
+            "mandatory_notice": "Human review and reproducible verification are required before external disclosure submission.",
             "findings": [f.to_dict() for f in findings],
         }
         return json.dumps(report_data, indent=2)

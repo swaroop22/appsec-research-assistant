@@ -12,23 +12,42 @@ import requests
 
 from appsec_assistant.config import ScopeGuard, ScopeViolationError
 from appsec_assistant.models import HTTPTransaction, TargetConfig
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from appsec_assistant.policy import ProgramPolicyManager
 
 
 class SafeHTTPClient:
     """
     A controlled HTTP client that guarantees all requests conform to local scope safeguards,
-    validates every redirect hop to prevent boundary escapes, and logs detailed transactions.
+    validates every redirect hop to prevent boundary escapes, disallows ambient proxy leakage,
+    and logs detailed transactions.
     """
 
     MAX_REDIRECTS = 5
 
-    def __init__(self, config: TargetConfig):
+    def __init__(
+        self,
+        config: TargetConfig,
+        policy_manager: Optional["ProgramPolicyManager"] = None,
+        proxy_url: Optional[str] = None,
+    ):
         self.config = config
+        self.policy_manager = policy_manager
         self.scope_guard = ScopeGuard(
             allowed_hosts=config.allowed_hosts,
         )
         self.session = requests.Session()
+        # CRITICAL: Prevent ambient environment variables (HTTP_PROXY, HTTPS_PROXY)
+        # from silently hijacking loopback traffic or redirecting requests outside scope
+        self.session.trust_env = False
         self.session.headers.update({"User-Agent": config.user_agent})
+
+        if proxy_url:
+            # Proxies must strictly reside on authorized loopback hosts (e.g., local ZAP or Burp proxy)
+            self.scope_guard.validate_url(proxy_url)
+            self.session.proxies = {"http": proxy_url, "https": proxy_url}
+
         self._history: List[HTTPTransaction] = []
         self._last_request_time: float = 0.0
 
@@ -67,8 +86,10 @@ class SafeHTTPClient:
             endpoint = endpoint_or_url.lstrip("/")
             current_url = f"{base}/{endpoint}"
 
-        # 1. Enforce initial Scope Guard validation
+        # 1. Enforce initial Scope Guard & Policy validation
         self.scope_guard.validate_url(current_url)
+        if self.policy_manager:
+            self.policy_manager.validate_target_authorization(current_url)
 
         req_headers = dict(self.session.headers)
         if headers:
@@ -105,10 +126,12 @@ class SafeHTTPClient:
                 # Resolve relative or absolute redirect destination
                 next_url = urljoin(current_url, raw_location)
 
-                # CRITICAL: Validate the redirect destination against the scope guard BEFORE following!
+                # CRITICAL: Validate the redirect destination against the scope guard and policy BEFORE following!
                 try:
                     self.scope_guard.validate_url(next_url)
-                except ScopeViolationError as sve:
+                    if self.policy_manager:
+                        self.policy_manager.validate_target_authorization(next_url)
+                except Exception as sve:
                     raise ScopeViolationError(
                         f"Redirect Boundary Escape Blocked: Server at '{current_url}' attempted to redirect "
                         f"to unauthorized out-of-scope destination '{next_url}': {sve}"

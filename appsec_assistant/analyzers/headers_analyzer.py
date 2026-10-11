@@ -14,6 +14,7 @@ from appsec_assistant.models import (
     SeverityLevel,
     ConfidenceLevel,
     FindingType,
+    FindingTier,
 )
 
 
@@ -424,6 +425,7 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "Confidence is CONFIRMED: Version disclosure string was observed directly in response headers."
                     ),
                     finding_type=FindingType.VERIFIED,
+                    finding_tier=FindingTier.OBSERVATION,
                     target_url=url,
                     description=(
                         "The server advertises granular version or framework details in response headers: "

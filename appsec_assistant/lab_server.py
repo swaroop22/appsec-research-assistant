@@ -12,6 +12,17 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional
 
 
+import json
+from urllib.parse import parse_qs, urlparse
+
+# Synthetic test accounts for educational local testing
+SYNTHETIC_ACCOUNTS = {
+    "1": {"id": 1, "username": "bob", "role": "user", "email": "bob@practice.lab", "balance": 150.00},
+    "2": {"id": 2, "username": "alice", "role": "user", "email": "alice@practice.lab", "balance": 450.00},
+    "99": {"id": 99, "username": "admin_charlie", "role": "admin", "email": "admin@practice.lab", "balance": 9999.00},
+}
+
+
 class MockLabHTTPHandler(BaseHTTPRequestHandler):
     """Handles requests for the local educational vulnerable lab."""
 
@@ -19,8 +30,33 @@ class MockLabHTTPHandler(BaseHTTPRequestHandler):
         # Suppress noisy standard server logs in console
         pass
 
+    def do_POST(self):
+        # Support POST for authentication exercises
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path in ("/auth/login", "/login"):
+            content_length = int(self.headers.get("Content-Length", 0))
+            post_body = self.rfile.read(content_length).decode("utf-8", errors="ignore") if content_length > 0 else ""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            # Vulnerability simulation: Session Fixation (reusing existing session or issuing unhardened cookie)
+            self.send_header("Set-Cookie", "session_id=sess_synth_alice_fixated_9912; Path=/")
+            self.end_headers()
+            resp = {
+                "status": "authenticated",
+                "message": "Simulated authentication successful for synthetic test user.",
+                "user": SYNTHETIC_ACCOUNTS["2"],
+                "session_fixed": True,
+            }
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+        else:
+            self.do_GET()
+
     def do_GET(self):
-        path = self.path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
 
         if path == "/" or path == "/index.html":
             # Simulate a typical unhardened web app root
@@ -38,23 +74,36 @@ class MockLabHTTPHandler(BaseHTTPRequestHandler):
 <h1>Welcome to the Local AppSec Practice Lab</h1>
 <p>This local server simulates typical security misconfigurations for defensive research.</p>
 <ul>
-    <li><a href="/api/Users/1">User Profile (Predictable ID)</a></li>
+    <li><a href="/api/Users/1">User Profile - Bob (Predictable ID)</a></li>
+    <li><a href="/api/Users/2">User Profile - Alice (Predictable ID)</a></li>
     <li><a href="/rest/basket/1">User Basket</a></li>
     <li><a href="/admin">Administrative Panel (Unauthenticated)</a></li>
     <li><a href="/admin/login">Admin Login Page (Auth Challenge - Not Vulnerable)</a></li>
+    <li><a href="/auth/login">Authentication Endpoint (Session Fixation Simulation)</a></li>
+    <li><a href="/auth/session">Session State Inspector</a></li>
+    <li><a href="/search?q=test">Search Input Endpoint (Input Reflection Simulation)</a></li>
+    <li><a href="/policy">Program Policy & Scope Terms</a></li>
     <li><a href="/hardened">Hardened Endpoint (Defense-in-Depth Comparison)</a></li>
 </ul>
 </body>
 </html>""")
 
         elif path.startswith("/api/Users/"):
-            # IDOR pattern simulation
+            # IDOR pattern simulation using synthetic test accounts
+            user_id = path.rstrip("/").split("/")[-1]
+            account = SYNTHETIC_ACCOUNTS.get(user_id, {
+                "id": int(user_id) if user_id.isdigit() else 0,
+                "username": f"user_{user_id}",
+                "role": "user",
+                "email": f"user_{user_id}@practice.lab",
+                "balance": 0.00,
+            })
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Server", "Express/4.17.1")
             self.send_header("Set-Cookie", "auth_token=jwt_xyz_demo; Path=/; SameSite=None")
             self.end_headers()
-            self.wfile.write(b'{"id": 1, "username": "admin@juice-sh.op", "role": "admin", "email": "admin@juice-sh.op"}')
+            self.wfile.write(json.dumps(account).encode("utf-8"))
 
         elif path.startswith("/rest/basket/"):
             self.send_response(200)
@@ -80,6 +129,72 @@ class MockLabHTTPHandler(BaseHTTPRequestHandler):
     <input type="password" name="password" placeholder="Password" />
     <button type="submit">Sign In</button>
 </form>""")
+
+        elif path in ("/auth/login", "/login"):
+            # GET on login endpoint: returns login instruction or demo form
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Set-Cookie", "pre_auth_cookie=pre_session_fixed_123; Path=/")
+            self.end_headers()
+            self.wfile.write(b"""<h1>Synthetic Auth Endpoint</h1>
+<p>Simulates authentication and session lifecycle testing with synthetic accounts.</p>
+<form action="/auth/login" method="POST">
+    <input type="text" name="username" value="alice" />
+    <input type="password" name="password" value="AlicePass123!" />
+    <button type="submit">Authenticate</button>
+</form>""")
+
+        elif path == "/auth/session":
+            # Session inspector endpoint
+            cookie_hdr = self.headers.get("Cookie", "none")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            resp = {
+                "status": "active_session",
+                "received_cookie": cookie_hdr,
+                "authenticated_user": SYNTHETIC_ACCOUNTS["2"],
+                "note": "Synthetic session inspector for authentication exercise.",
+            }
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+
+        elif path == "/search":
+            # Input validation exercise: safe simulated parameter reflection
+            query_val = query.get("q", [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            resp_html = f"""<!DOCTYPE html>
+<html>
+<head><title>Search Results</title></head>
+<body>
+<h1>Search Results</h1>
+<p>Query searched: {query_val}</p>
+<div class="results">No items matched your search query.</div>
+</body>
+</html>"""
+            self.wfile.write(resp_html.encode("utf-8"))
+
+        elif path == "/api/echo":
+            # API input reflection exercise
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"echo_params": query, "target": "synthetic_lab"}).encode("utf-8"))
+
+        elif path == "/policy":
+            # VDP policy endpoint for local training
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            policy_info = {
+                "program": "Local AppSec Practice Lab",
+                "scope": ["http://127.0.0.1:5000/*", "http://localhost:5000/*"],
+                "prohibited": ["DoS", "Brute Force (>10 rps)", "Social Engineering"],
+                "rate_limit_rps": 5.0,
+                "status": "authorized_educational_environment",
+            }
+            self.wfile.write(json.dumps(policy_info).encode("utf-8"))
 
         elif path == "/redirect-out-of-scope":
             # Boundary test case: Attempts to redirect to an unauthorized external target

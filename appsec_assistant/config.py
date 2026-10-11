@@ -100,9 +100,12 @@ def parse_numeric_ip(host_str: str) -> Optional[ipaddress.IPv4Address]:
 
 class ScopeGuard:
     """
-    Guarantees that security analysis is strictly confined to authorized local lab environments.
+    Enforces strict boundaries to confine security analysis to authorized local lab environments.
     Blocks remote, production, or unapproved hostnames and IP addresses, including
     alternate numeric IP representations, DNS rebinding vectors, and malformed URLs.
+    Boundary enforcement operates deterministically at the application and URL-parsing layer;
+    defense-in-depth in enterprise deployments should supplement this with firewall egress filtering
+    and container-level network isolation.
     """
 
     DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"]
@@ -137,12 +140,12 @@ class ScopeGuard:
                 f"Unsupported URL scheme '{parsed.scheme}'. Only http and https are permitted."
             )
 
-        # Check for userinfo / credentials in authority: e.g. http://localhost@attacker.com
+        # Reject userinfo / credentials in authority to prevent parser confusion and credential leaks
         if "@" in parsed.netloc:
-            # Ensure the actual destination host is scrutinized, or reject userinfo
-            userinfo, _, host_part = parsed.netloc.rpartition("@")
-            if not host_part:
-                raise ScopeViolationError(f"Malformed URL authority in '{url_stripped}'.")
+            raise ScopeViolationError(
+                f"Target URL authority contains embedded user credentials ('@') in '{url_stripped}'. "
+                "Embedded credentials/userinfo are not permitted."
+            )
 
         hostname = parsed.hostname
         if not hostname:

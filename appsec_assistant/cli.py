@@ -41,14 +41,14 @@ def display_findings_table(findings: List[VulnerabilityFinding]) -> None:
         console.print("[green]✔ No security weaknesses found.[/green]")
         return
 
-    table = Table(title="Security Assessment Findings (Phase 2)", border_style="cyan")
+    table = Table(title="Security Assessment Findings (Phase 3 Controlled Workflow)", border_style="cyan")
     table.add_column("ID", style="dim", width=14)
+    table.add_column("Tier", width=14)
     table.add_column("Severity", width=10)
     table.add_column("Confidence", width=12)
-    table.add_column("Type", width=11)
     table.add_column("Title", style="bold")
     table.add_column("Category", style="cyan")
-    table.add_column("CWE", style="magenta", width=10)
+    table.add_column("Reviewed", width=9)
 
     # Sort by severity descending, then confidence rank descending
     sorted_findings = sorted(findings, key=lambda x: (x.severity.rank, x.confidence.rank), reverse=True)
@@ -70,14 +70,23 @@ def display_findings_table(findings: List[VulnerabilityFinding]) -> None:
             "HEURISTIC": "[cyan]HEURISTIC[/cyan]",
         }.get(f.confidence.value, f.confidence.value)
 
+        tier_style = {
+            "OBSERVATION": "[dim cyan]Observation[/dim cyan]",
+            "HEURISTIC_INDICATOR": "[cyan]Heuristic[/cyan]",
+            "SUSPECTED_VULNERABILITY": "[yellow]Suspected[/yellow]",
+            "INDEPENDENTLY_VERIFIED": "[bold green]Verified[/bold green]",
+        }.get(getattr(f.finding_tier, "value", "SUSPECTED_VULNERABILITY"), "Suspected")
+
+        hr_str = "[green]YES[/green]" if getattr(f, "human_reviewed", False) else "[dim]NO[/dim]"
+
         table.add_row(
             f.finding_id,
+            tier_style,
             sev_style,
             conf_style,
-            f.finding_type.value,
             f.title,
             f.category,
-            f.cwe_id or "N/A"
+            hr_str
         )
 
     console.print(table)
@@ -85,35 +94,39 @@ def display_findings_table(findings: List[VulnerabilityFinding]) -> None:
 
 def display_finding_detail(f: VulnerabilityFinding) -> None:
     affected = ", ".join(f.affected_urls) if f.affected_urls else f.target_url
+    tier_label = f.finding_tier.label if hasattr(f, "finding_tier") else "Suspected Vulnerability"
+    hr_status = f"Approved by {f.reviewed_by} on {f.review_date}" if getattr(f, "human_reviewed", False) else "Pending Human Review"
+    
+    repro_formatted = "\n".join(f"- {s}" for s in getattr(f, "reproduction_steps", []))
+    sanitized_ev = getattr(f, "sanitized_evidence", "") or f.evidence
+
     content = f"""
 **Finding ID:** `{f.finding_id}`  
 **Category:** {f.category}  
+**Verification Tier:** **`{tier_label}`**  
 **Severity:** {f.severity.value}  
 **Confidence:** {f.confidence.value} ({f.confidence_explanation})  
-**Finding Type:** `{f.finding_type.value}`  
 **Target URL:** `{f.target_url}`  
 **Affected Endpoints:** `{affected}`  
+**Human Review Status:** `{hr_status}`  
 **OWASP Category:** {f.owasp_category or 'N/A'}  
 **CWE ID:** {f.cwe_id or 'N/A'}  
 
-### Priority Rationale
+### Priority & Severity Rationale
 {f.priority_rationale}
 
-### Description
-{f.description}
+### Step-by-Step Reproduction Guide
+{repro_formatted}
 
-### Potential Security Impact
-{f.impact}
-
-### Evidence & Reproduction Artifact
-```
-{f.evidence}
+### Sanitized Evidence (Tokens & Credentials Redacted)
+```text
+{sanitized_ev.strip()}
 ```
 
-### Defensive Remediation
+### Remediation Guidance
 {f.remediation}
 """
-    console.print(Panel(Markdown(content), title=f"[bold red]{f.title}[/bold red]", border_style="red"))
+    console.print(Panel(Markdown(content), title=f"[bold]{f.title}[/bold]", border_style="cyan"))
 
 
 def run_interactive_menu() -> None:
@@ -274,6 +287,9 @@ def run_interactive_menu() -> None:
             break
 
 
+from appsec_assistant.policy import ProgramPolicyManager, PolicyVerificationError
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="AppSec Research Assistant: Web Security Analysis for Defensive Study"
@@ -283,10 +299,84 @@ def main() -> None:
     parser.add_argument("--export-json", help="Export findings to JSON file")
     parser.add_argument("--lab", action="store_true", help="Spin up local mock lab and run audit")
     parser.add_argument("--guide", help="Print educational guide for a vulnerability (idor, xss, sqli, auth, broken_access_control)")
+    parser.add_argument("--policies", action="store_true", help="List configured VDP program policies and verification status")
+    parser.add_argument("--verify-policy", help="Manually verify and enable a program policy by ID")
+    parser.add_argument("--reviewer", default="Security Researcher", help="Reviewer name for policy verification or finding sign-off")
+    parser.add_argument("--notes", default="Manual scope verification completed.", help="Verification notes")
+    parser.add_argument("--exercises", action="store_true", help="List available guided security exercises")
+    parser.add_argument("--run-exercise", help="Execute a specific guided exercise by ID (e.g. EX-AC-01, EX-IDOR-01)")
+    parser.add_argument("--review-all", action="store_true", help="Mark all generated findings as human-reviewed before export")
 
     args = parser.parse_args()
 
     print_banner()
+
+    policy_mgr = ProgramPolicyManager()
+
+    # If --policies flag specified
+    if args.policies:
+        console.print("[bold cyan]Configured Vulnerability Disclosure Program Policies:[/bold cyan]")
+        p_table = Table(border_style="cyan")
+        p_table.add_column("Program ID", style="bold")
+        p_table.add_column("Organization")
+        p_table.add_column("Verified", width=10)
+        p_table.add_column("Enabled", width=10)
+        p_table.add_column("Authorized Scope Assets")
+        for p in policy_mgr.list_policies():
+            v_str = "[green]YES[/green]" if p.is_verified else "[red]NO[/red]"
+            e_str = "[green]ENABLED[/green]" if p.is_enabled else "[yellow]DISABLED[/yellow]"
+            p_table.add_row(p.program_id, p.organization, v_str, e_str, ", ".join(p.authorized_assets))
+        console.print(p_table)
+        sys.exit(0)
+
+    # If --verify-policy flag specified
+    if args.verify_policy:
+        try:
+            policy_mgr.verify_policy(args.verify_policy, reviewer_name=args.reviewer, verification_notes=args.notes)
+            policy_mgr.enable_policy(args.verify_policy)
+            console.print(f"[bold green]✔ Successfully verified and enabled policy '{args.verify_policy}' by {args.reviewer}.[/bold green]")
+        except PolicyVerificationError as pve:
+            console.print(f"[bold red]✖ Policy Verification Failed: {pve}[/bold red]")
+            sys.exit(1)
+        sys.exit(0)
+
+    # If --exercises flag specified
+    if args.exercises:
+        console.print("[bold cyan]Guided Educational Security Exercises:[/bold cyan]")
+        e_table = Table(border_style="cyan")
+        e_table.add_column("Exercise ID", style="bold", width=12)
+        e_table.add_column("Category", width=22)
+        e_table.add_column("Target Endpoint", width=20)
+        e_table.add_column("Expected Tier", width=22)
+        e_table.add_column("Title")
+        for ex in VulnerabilityKnowledgeBase.list_exercises():
+            e_table.add_row(ex.exercise_id, ex.category, ex.target_endpoint, ex.expected_tier.label, ex.title)
+        console.print(e_table)
+        sys.exit(0)
+
+    # If --run-exercise flag specified
+    if args.run_exercise:
+        exercise = VulnerabilityKnowledgeBase.get_exercise(args.run_exercise)
+        if not exercise:
+            console.print(f"[red]Exercise '{args.run_exercise}' not found. Use --exercises to list available exercises.[/red]")
+            sys.exit(1)
+
+        lab_server = LocalLabServer(port=5000)
+        lab_server.start()
+        console.print(f"[green]✔ Started practice lab on http://127.0.0.1:5000[/green]")
+        console.print(f"[cyan]Executing Exercise: {exercise.title}[/cyan]")
+        console.print(f"[dim]Objective: {exercise.objective}[/dim]\n")
+
+        config = TargetConfig(base_url="http://127.0.0.1:5000")
+        engine = AuditEngine(config, policy_manager=policy_mgr)
+        findings = engine.audit_exercise(exercise)
+
+        display_findings_table(findings)
+        console.print(f"\n[bold green]Verification Criteria:[/bold green] {exercise.verification_criteria}")
+        console.print(f"[bold cyan]Remediation Summary:[/bold cyan] {exercise.remediation_summary}")
+
+        lab_server.stop()
+        sys.exit(0)
 
     # If guide flag specified
     if args.guide:
@@ -307,11 +397,21 @@ def main() -> None:
             console.print("[green]✔ Started built-in training lab on http://127.0.0.1:5000[/green]")
 
         config = TargetConfig(base_url=target_url)
-        engine = AuditEngine(config)
+        engine = AuditEngine(config, policy_manager=policy_mgr)
         console.print(f"[cyan]Auditing target: {target_url}...[/cyan]")
 
         endpoints = ["/", "/api/Users/1", "/rest/basket/1", "/admin", "/hardened"]
         engine.run_suite(endpoints)
+
+        if args.review_all:
+            import datetime
+            now_dt = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            for f in engine.findings:
+                f.human_reviewed = True
+                f.reviewed_by = args.reviewer
+                f.review_date = now_dt
+                f.review_notes = "Verified through CLI regression audit."
+            console.print(f"[green]✔ Marked all findings as Human-Reviewed by {args.reviewer}[/green]")
 
         display_findings_table(engine.findings)
 

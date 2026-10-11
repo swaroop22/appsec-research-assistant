@@ -12,6 +12,12 @@ from appsec_assistant.analyzers.access_control_analyzer import AccessControlAnal
 from appsec_assistant.models import HTTPTransaction, VulnerabilityFinding, TargetConfig
 
 
+from appsec_assistant.policy import ProgramPolicyManager
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from appsec_assistant.knowledge_base import GuidedExercise
+
+
 class AuditEngine:
     """Orchestrates defensive analysis of target endpoints with deduplication and evidence tracking."""
 
@@ -26,9 +32,15 @@ class AuditEngine:
         "SEC-HDR-010",  # Missing Permissions-Policy
     }
 
-    def __init__(self, config: TargetConfig, analyzers: Optional[List[BaseAnalyzer]] = None):
+    def __init__(
+        self,
+        config: TargetConfig,
+        analyzers: Optional[List[BaseAnalyzer]] = None,
+        policy_manager: Optional[ProgramPolicyManager] = None,
+    ):
         self.config = config
-        self.client = SafeHTTPClient(config)
+        self.policy_manager = policy_manager
+        self.client = SafeHTTPClient(config, policy_manager=policy_manager)
         self.analyzers: List[BaseAnalyzer] = analyzers or [
             HeadersAnalyzer(),
             CookiesAnalyzer(),
@@ -110,6 +122,13 @@ class AuditEngine:
         transaction = self.client.fetch(endpoint_or_url, method=method)
         return self.audit_transaction(transaction)
 
+    def audit_exercise(self, exercise: "GuidedExercise") -> List[VulnerabilityFinding]:
+        """
+        Executes a targeted audit against the endpoint specified by a guided training exercise.
+        Returns the discovered findings for verification against exercise criteria.
+        """
+        return self.audit_endpoint(exercise.target_endpoint)
+
     def run_suite(self, endpoints: List[str]) -> List[VulnerabilityFinding]:
         """Executes a defensive audit suite across a list of endpoints."""
         all_new: List[VulnerabilityFinding] = []
@@ -120,3 +139,4 @@ class AuditEngine:
             except Exception as e:
                 print(f"[!] Warning: Could not audit endpoint '{ep}': {e}")
         return all_new
+

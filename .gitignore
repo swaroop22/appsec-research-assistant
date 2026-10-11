@@ -33,3 +33,6 @@ htmlcov/
 .env
 .env.*
 !.env.example
+
+# Local Policy and State
+.vdp_policies.json
