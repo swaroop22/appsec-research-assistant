@@ -3,11 +3,18 @@ Cookie Security Analyzer.
 
 Audits session cookies and authentication tokens for essential defensive flags:
 Secure, HttpOnly, and SameSite attributes, as well as safe prefix conventions.
+Includes confidence scoring separate from severity.
 """
 
 from typing import List, Dict, Any
 from appsec_assistant.analyzers.base import BaseAnalyzer
-from appsec_assistant.models import HTTPTransaction, VulnerabilityFinding, SeverityLevel
+from appsec_assistant.models import (
+    HTTPTransaction,
+    VulnerabilityFinding,
+    SeverityLevel,
+    ConfidenceLevel,
+    FindingType,
+)
 
 
 class CookiesAnalyzer(BaseAnalyzer):
@@ -83,6 +90,12 @@ class CookiesAnalyzer(BaseAnalyzer):
                         category="Cookie Security",
                         severity=severity,
                         priority_rationale=rationale,
+                        confidence=ConfidenceLevel.HIGH,
+                        confidence_explanation=(
+                            f"Confidence is HIGH: Set-Cookie directive for '{name}' was directly inspected "
+                            "and verified to lack the 'HttpOnly' attribute."
+                        ),
+                        finding_type=FindingType.VERIFIED,
                         target_url=url,
                         description=(
                             f"The cookie '{name}' was set without the 'HttpOnly' attribute. "
@@ -130,6 +143,12 @@ class CookiesAnalyzer(BaseAnalyzer):
                         category="Cookie Security",
                         severity=severity,
                         priority_rationale=rationale,
+                        confidence=ConfidenceLevel.HIGH,
+                        confidence_explanation=(
+                            f"Confidence is HIGH: Set-Cookie directive for '{name}' was directly inspected "
+                            "and verified to lack the 'Secure' attribute."
+                        ),
+                        finding_type=FindingType.VERIFIED,
                         target_url=url,
                         description=(
                             f"The cookie '{name}' does not include the 'Secure' attribute. "
@@ -169,6 +188,11 @@ class CookiesAnalyzer(BaseAnalyzer):
                         category="Cookie Security",
                         severity=SeverityLevel.MEDIUM,
                         priority_rationale=rationale,
+                        confidence=ConfidenceLevel.HIGH,
+                        confidence_explanation=(
+                            f"Confidence is HIGH: Directly confirmed that '{name}' omits or sets weak SameSite."
+                        ),
+                        finding_type=FindingType.VERIFIED,
                         target_url=url,
                         description=(
                             f"The cookie '{name}' either omits the SameSite attribute or sets it to 'None'. "
@@ -205,6 +229,12 @@ class CookiesAnalyzer(BaseAnalyzer):
                             "are advanced defense-in-depth controls preventing subdomain cookie tossing, "
                             "rather than a vulnerability indicator."
                         ),
+                        confidence=ConfidenceLevel.MEDIUM,
+                        confidence_explanation=(
+                            "Confidence is MEDIUM: Recommendation is an architectural hardening pattern rather "
+                            "than an active vulnerability."
+                        ),
+                        finding_type=FindingType.HEURISTIC,
                         target_url=url,
                         description=(
                             f"The sensitive cookie '{name}' does not use browser cookie prefix conventions. "

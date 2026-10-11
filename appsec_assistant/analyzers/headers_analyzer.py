@@ -8,7 +8,13 @@ Referrer-Policy, X-Frame-Options (Clickjacking), Permissions-Policy, CORS, and i
 
 from typing import List, Dict
 from appsec_assistant.analyzers.base import BaseAnalyzer
-from appsec_assistant.models import HTTPTransaction, VulnerabilityFinding, SeverityLevel
+from appsec_assistant.models import (
+    HTTPTransaction,
+    VulnerabilityFinding,
+    SeverityLevel,
+    ConfidenceLevel,
+    FindingType,
+)
 
 
 class HeadersAnalyzer(BaseAnalyzer):
@@ -27,7 +33,6 @@ class HeadersAnalyzer(BaseAnalyzer):
 
     def analyze(self, transaction: HTTPTransaction) -> List[VulnerabilityFinding]:
         findings: List[VulnerabilityFinding] = []
-        # Normalize header keys to lowercase for case-insensitive lookup
         headers_lower: Dict[str, str] = {k.lower(): v for k, v in transaction.response_headers.items()}
         url = transaction.url
         is_https = url.lower().startswith("https://")
@@ -47,6 +52,12 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "is not inherently exploitable by itself unless an underlying injection flaw exists, "
                         "so it is never classified as Critical or High on its own."
                     ),
+                    confidence=ConfidenceLevel.HIGH,
+                    confidence_explanation=(
+                        "Confidence is HIGH: Deterministic inspection of the HTTP response headers "
+                        "confirms that no Content-Security-Policy header is configured."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "The application response does not include a Content-Security-Policy (CSP) header. "
@@ -58,7 +69,10 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "from untrusted domains, significantly increasing susceptibility to Cross-Site Scripting (XSS), "
                         "clickjacking, session token theft, and malicious data exfiltration."
                     ),
-                    evidence=f"HTTP/{transaction.status_code} response headers contain no 'Content-Security-Policy'.",
+                    evidence=(
+                        f"GET {url} -> HTTP/{transaction.status_code} response headers contain no 'Content-Security-Policy'. "
+                        f"Observed headers ({len(transaction.response_headers)}): {list(transaction.response_headers.keys())[:8]}"
+                    ),
                     remediation=(
                         "Implement and enforce a restrictive Content-Security-Policy header. "
                         "Start with a strong baseline:\n"
@@ -96,6 +110,12 @@ class HeadersAnalyzer(BaseAnalyzer):
                             "Assigned LOW priority because while a CSP header is actively deployed, "
                             "permissive directives ('unsafe-inline' / 'unsafe-eval') weaken its ability to stop script injection."
                         ),
+                        confidence=ConfidenceLevel.CONFIRMED,
+                        confidence_explanation=(
+                            "Confidence is CONFIRMED: Deterministic text analysis of the Content-Security-Policy "
+                            "directive value revealed explicit permissive keywords."
+                        ),
+                        finding_type=FindingType.VERIFIED,
                         target_url=url,
                         description=(
                             f"The Content-Security-Policy header contains permissive directives: {', '.join(weaknesses)}."
@@ -128,6 +148,11 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "Assigned LOW priority because missing MIME-sniffing protection allows certain edge-case "
                         "content type confusion attacks, but requires file upload or user-controlled content to be exploitable."
                     ),
+                    confidence=ConfidenceLevel.HIGH,
+                    confidence_explanation=(
+                        "Confidence is HIGH: Deterministic check verifies the absence of 'nosniff' in the response headers."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "The 'X-Content-Type-Options: nosniff' header is missing. "
@@ -172,6 +197,11 @@ class HeadersAnalyzer(BaseAnalyzer):
                     category="Security Headers",
                     severity=severity,
                     priority_rationale=priority_note,
+                    confidence=ConfidenceLevel.HIGH,
+                    confidence_explanation=(
+                        "Confidence is HIGH: Directly verified absence of Strict-Transport-Security header."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "The response does not specify the 'Strict-Transport-Security' (HSTS) header. "
@@ -213,6 +243,11 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "that can leak URL paths and query parameters to third-party domains, it is not an immediate vulnerability "
                         "unless sensitive data is transmitted within URLs."
                     ),
+                    confidence=ConfidenceLevel.HIGH,
+                    confidence_explanation=(
+                        "Confidence is HIGH: Directly confirmed absence of Referrer-Policy in HTTP response headers."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "The 'Referrer-Policy' header is omitted. This header governs how much referrer information "
@@ -222,7 +257,7 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "Browsers may transmit sensitive URL paths or query parameters (such as temporary reset tokens, "
                         "session identifiers, or personal identifiers) to external services and third-party links via the HTTP Referer header."
                     ),
-                    evidence="Referrer-Policy header is missing from the response.",
+                    evidence="Referrer-Policy header is missing from the response headers.",
                     remediation=(
                         "Set a secure Referrer-Policy such as 'strict-origin-when-cross-origin' or 'no-referrer':\n"
                         "```http\n"
@@ -250,6 +285,11 @@ class HeadersAnalyzer(BaseAnalyzer):
                             f"Assigned LOW priority because setting Referrer-Policy to '{referrer_policy}' "
                             "transmits complete URLs across origins or during protocol changes."
                         ),
+                        confidence=ConfidenceLevel.CONFIRMED,
+                        confidence_explanation=(
+                            f"Confidence is CONFIRMED: Observed permissive policy '{referrer_policy}' in headers."
+                        ),
+                        finding_type=FindingType.VERIFIED,
                         target_url=url,
                         description=(
                             f"The application configures 'Referrer-Policy: {referrer_policy}'. "
@@ -287,6 +327,12 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "enabling Clickjacking (UI redressing) attacks against authenticated users. It is not Critical "
                         "because exploitation requires social engineering and interaction."
                     ),
+                    confidence=ConfidenceLevel.HIGH,
+                    confidence_explanation=(
+                        "Confidence is HIGH: Direct inspection verified that neither X-Frame-Options nor "
+                        "CSP frame-ancestors is present."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "Neither 'X-Frame-Options' nor CSP 'frame-ancestors' was supplied. "
@@ -326,6 +372,11 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "that restricts browser hardware features (camera, mic, geolocation). Its absence represents "
                         "a defense-in-depth opportunity rather than a direct risk."
                     ),
+                    confidence=ConfidenceLevel.HIGH,
+                    confidence_explanation=(
+                        "Confidence is HIGH: Verified absence of Permissions-Policy / Feature-Policy headers."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "The 'Permissions-Policy' header is not configured. This header allows web developers "
@@ -368,6 +419,11 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "Assigned LOW priority because software version banners assist attacker reconnaissance, "
                         "but do not directly permit exploitation without an existing software vulnerability."
                     ),
+                    confidence=ConfidenceLevel.CONFIRMED,
+                    confidence_explanation=(
+                        "Confidence is CONFIRMED: Version disclosure string was observed directly in response headers."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "The server advertises granular version or framework details in response headers: "
@@ -403,6 +459,11 @@ class HeadersAnalyzer(BaseAnalyzer):
                         "Assigned LOW priority because wildcard CORS is standard for open public APIs, "
                         "but presents a risk if applied to sensitive private resources."
                     ),
+                    confidence=ConfidenceLevel.CONFIRMED,
+                    confidence_explanation=(
+                        "Confidence is CONFIRMED: Observed Access-Control-Allow-Origin: * in response headers."
+                    ),
+                    finding_type=FindingType.VERIFIED,
                     target_url=url,
                     description=(
                         "The endpoint responds with `Access-Control-Allow-Origin: *`. "

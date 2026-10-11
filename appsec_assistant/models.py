@@ -38,6 +38,35 @@ class SeverityLevel(str, Enum):
         return ranks.get(self.value, 0)
 
 
+class ConfidenceLevel(str, Enum):
+    """
+    Indicates certainty that an issue is genuine and reproducible,
+    separate from its potential security severity.
+    """
+    CONFIRMED = "CONFIRMED"   # Verified through reproducible supporting evidence
+    HIGH = "HIGH"             # Direct deterministic observation (e.g. missing header/cookie attribute)
+    MEDIUM = "MEDIUM"         # Probable issue based on strong indicators
+    LOW = "LOW"               # Low certainty, possible false positive
+    HEURISTIC = "HEURISTIC"   # Pattern or naming heuristic; unverified without cross-context validation
+
+    @property
+    def rank(self) -> int:
+        ranks = {
+            "HEURISTIC": 0,
+            "LOW": 1,
+            "MEDIUM": 2,
+            "HIGH": 3,
+            "CONFIRMED": 4,
+        }
+        return ranks.get(self.value, 0)
+
+
+class FindingType(str, Enum):
+    """Distinguishes confirmed vulnerabilities from heuristic indicators."""
+    VERIFIED = "VERIFIED"     # Confirmed vulnerability with reproducible evidence
+    HEURISTIC = "HEURISTIC"   # Architectural or pattern observation (e.g., IDOR indicator)
+
+
 @dataclass
 class VulnerabilityFinding:
     """Represents a discovered security finding with evidence and remediation."""
@@ -53,10 +82,18 @@ class VulnerabilityFinding:
     cwe_id: Optional[str] = None
     owasp_category: Optional[str] = None
     priority_rationale: str = ""
+    confidence: ConfidenceLevel = ConfidenceLevel.HIGH
+    confidence_explanation: str = ""
+    finding_type: FindingType = FindingType.VERIFIED
+    affected_urls: List[str] = field(default_factory=list)
     references: List[str] = field(default_factory=list)
     timestamp: str = field(
         default_factory=lambda: datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     )
+
+    def __post_init__(self):
+        if not self.affected_urls and self.target_url:
+            self.affected_urls = [self.target_url]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -65,7 +102,11 @@ class VulnerabilityFinding:
             "category": self.category,
             "severity": self.severity.value,
             "priority_rationale": self.priority_rationale,
+            "confidence": self.confidence.value,
+            "confidence_explanation": self.confidence_explanation,
+            "finding_type": self.finding_type.value,
             "target_url": self.target_url,
+            "affected_urls": self.affected_urls,
             "description": self.description,
             "impact": self.impact,
             "evidence": self.evidence,

@@ -78,28 +78,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+from appsec_assistant.analyzers.access_control_analyzer import AccessControlAnalyzer
+
+
 def analyze_http_response(raw_text: str, target_url: str) -> tuple:
-    """Parses transaction and executes passive header and cookie analyzers."""
+    """Parses transaction and executes passive header, cookie, and access-control analyzers."""
     transaction = parse_raw_http_response(raw_text, default_url=target_url)
     
     headers_analyzer = HeadersAnalyzer()
     cookies_analyzer = CookiesAnalyzer()
+    access_analyzer = AccessControlAnalyzer()
 
     findings: List[VulnerabilityFinding] = []
     findings.extend(headers_analyzer.analyze(transaction))
     findings.extend(cookies_analyzer.analyze(transaction))
+    findings.extend(access_analyzer.analyze(transaction))
 
-    # Sort findings by severity rank descending
-    sorted_findings = sorted(findings, key=lambda x: x.severity.rank, reverse=True)
+    # Sort findings by severity rank descending, then confidence
+    sorted_findings = sorted(findings, key=lambda x: (x.severity.rank, x.confidence.rank), reverse=True)
     return transaction, sorted_findings
 
 
 def main():
-    st.markdown('<div class="main-header">🛡️ AppSec Research Assistant — Phase 1</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🛡️ AppSec Research Assistant — Phase 2</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="sub-header">'
         'Passive Defensive HTTP Response Analyzer for Educational Security Research & Hardening. '
-        'Inspects missing security headers and cookie flags without sending external network traffic.'
+        'Inspects missing security headers, cookie flags, and access control patterns with confidence scoring and report deduplication.'
         '</div>',
         unsafe_allow_html=True
     )
@@ -211,6 +216,8 @@ def main():
                     table_rows.append({
                         "ID": f.finding_id,
                         "Priority": f.severity.value,
+                        "Confidence": f.confidence.value,
+                        "Type": f.finding_type.value,
                         "Title": f.title,
                         "Category": f.category,
                         "CWE": f.cwe_id or "N/A",
@@ -223,16 +230,24 @@ def main():
                 st.markdown("### 🔎 Detailed Explanations & Actionable Remediations")
                 for f in filtered_findings:
                     badge_color = {
+                        SeverityLevel.CRITICAL: "badge-high",
                         SeverityLevel.HIGH: "badge-high",
                         SeverityLevel.MEDIUM: "badge-medium",
                         SeverityLevel.LOW: "badge-low",
                         SeverityLevel.INFO: "badge-info",
                     }.get(f.severity, "badge-info")
 
-                    header_label = f"[{f.severity.value}] {f.title} ({f.finding_id})"
-                    with st.expander(header_label, expanded=(f.severity == SeverityLevel.HIGH)):
-                        st.markdown(f"**Priority:** <span class='{badge_color}'>{f.severity.value}</span> &nbsp;&nbsp;|&nbsp;&nbsp; **Category:** `{f.category}` &nbsp;&nbsp;|&nbsp;&nbsp; **CWE:** `{f.cwe_id or 'N/A'}`", unsafe_allow_html=True)
+                    header_label = f"[{f.severity.value}] [{f.confidence.value}] {f.title} ({f.finding_id})"
+                    with st.expander(header_label, expanded=(f.severity in (SeverityLevel.CRITICAL, SeverityLevel.HIGH))):
+                        st.markdown(
+                            f"**Priority:** <span class='{badge_color}'>{f.severity.value}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
+                            f"**Confidence:** `{f.confidence.value}` &nbsp;&nbsp;|&nbsp;&nbsp; "
+                            f"**Finding Type:** `{f.finding_type.value}` &nbsp;&nbsp;|&nbsp;&nbsp; "
+                            f"**CWE:** `{f.cwe_id or 'N/A'}`",
+                            unsafe_allow_html=True
+                        )
                         
+                        st.markdown(f"**Confidence Explanation:** {f.confidence_explanation}")
                         st.markdown(f"**Why this Priority?**\n{f.priority_rationale}")
 
                         col_desc, col_imp = st.columns(2)

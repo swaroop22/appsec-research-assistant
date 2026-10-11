@@ -2,7 +2,7 @@
 Markdown Vulnerability Report Generator.
 
 Exports security findings in an industry-standard, clean markdown format
-with executive summaries, finding breakdowns, evidence snippets, and remediations.
+with executive summaries, confidence ratings, finding breakdowns, evidence snippets, and remediations.
 """
 
 import datetime
@@ -46,7 +46,7 @@ class MarkdownReporter:
             f"- **Target Application:** `{target_url}`",
             f"- **Assessment Date:** {now_str}",
             f"- **Total Findings:** {total_findings}",
-            f"- **Assessor Tool:** AppSec Research Assistant v1.0",
+            f"- **Assessor Tool:** AppSec Research Assistant v2.0 (Phase 2)",
             "",
             "### Severity Distribution",
             "",
@@ -62,8 +62,8 @@ class MarkdownReporter:
             "",
             "## 2. Table of Findings",
             "",
-            "| ID | Title | Category | Severity | CWE |",
-            "| :--- | :--- | :--- | :--- | :--- |",
+            "| ID | Title | Category | Severity | Confidence | Type | CWE |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
         ]
 
         # Sort findings by severity rank descending
@@ -77,8 +77,10 @@ class MarkdownReporter:
                 "LOW": "🟢 Low",
                 "INFO": "🔵 Info",
             }.get(f.severity.value, f.severity.value)
+            conf_str = f.confidence.value
+            type_str = f.finding_type.value
             lines.append(
-                f"| `{f.finding_id}` | {f.title} | {f.category} | {sev_badge} | `{f.cwe_id or 'N/A'}` |"
+                f"| `{f.finding_id}` | {f.title} | {f.category} | {sev_badge} | {conf_str} | `{type_str}` | `{f.cwe_id or 'N/A'}` |"
             )
 
         lines.extend([
@@ -93,14 +95,21 @@ class MarkdownReporter:
             lines.append("*No security findings recorded for this target.*")
         else:
             for idx, f in enumerate(sorted_findings, start=1):
+                affected_str = ", ".join(f.affected_urls) if f.affected_urls else f.target_url
                 lines.extend([
                     f"### 3.{idx}. [{f.finding_id}] {f.title}",
                     "",
                     f"- **Severity:** **{f.severity.value}**",
+                    f"- **Confidence:** **{f.confidence.value}** ({f.confidence_explanation})",
+                    f"- **Finding Type:** `{f.finding_type.value}`",
                     f"- **Category:** {f.category}",
                     f"- **Affected URL:** `{f.target_url}`",
+                    f"- **Endpoints Evaluated:** `{affected_str}`",
                     f"- **OWASP Classification:** {f.owasp_category or 'N/A'}",
                     f"- **CWE Identifier:** {f.cwe_id or 'N/A'}",
+                    "",
+                    "#### Priority Rationale",
+                    f.priority_rationale,
                     "",
                     "#### Description",
                     f.description,

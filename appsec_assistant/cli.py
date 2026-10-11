@@ -41,15 +41,17 @@ def display_findings_table(findings: List[VulnerabilityFinding]) -> None:
         console.print("[green]✔ No security weaknesses found.[/green]")
         return
 
-    table = Table(title="Security Assessment Findings", border_style="cyan")
+    table = Table(title="Security Assessment Findings (Phase 2)", border_style="cyan")
     table.add_column("ID", style="dim", width=14)
-    table.add_column("Severity", width=12)
+    table.add_column("Severity", width=10)
+    table.add_column("Confidence", width=12)
+    table.add_column("Type", width=11)
     table.add_column("Title", style="bold")
     table.add_column("Category", style="cyan")
     table.add_column("CWE", style="magenta", width=10)
 
-    # Sort by severity descending
-    sorted_findings = sorted(findings, key=lambda x: x.severity.rank, reverse=True)
+    # Sort by severity descending, then confidence rank descending
+    sorted_findings = sorted(findings, key=lambda x: (x.severity.rank, x.confidence.rank), reverse=True)
 
     for f in sorted_findings:
         sev_style = {
@@ -60,19 +62,42 @@ def display_findings_table(findings: List[VulnerabilityFinding]) -> None:
             SeverityLevel.INFO: "[blue]INFO[/blue]",
         }.get(f.severity, f.severity.value)
 
-        table.add_row(f.finding_id, sev_style, f.title, f.category, f.cwe_id or "N/A")
+        conf_style = {
+            "CONFIRMED": "[bold green]CONFIRMED[/bold green]",
+            "HIGH": "[green]HIGH[/green]",
+            "MEDIUM": "[yellow]MEDIUM[/yellow]",
+            "LOW": "[dim]LOW[/dim]",
+            "HEURISTIC": "[cyan]HEURISTIC[/cyan]",
+        }.get(f.confidence.value, f.confidence.value)
+
+        table.add_row(
+            f.finding_id,
+            sev_style,
+            conf_style,
+            f.finding_type.value,
+            f.title,
+            f.category,
+            f.cwe_id or "N/A"
+        )
 
     console.print(table)
 
 
 def display_finding_detail(f: VulnerabilityFinding) -> None:
+    affected = ", ".join(f.affected_urls) if f.affected_urls else f.target_url
     content = f"""
 **Finding ID:** `{f.finding_id}`  
 **Category:** {f.category}  
 **Severity:** {f.severity.value}  
-**Affected URL:** `{f.target_url}`  
+**Confidence:** {f.confidence.value} ({f.confidence_explanation})  
+**Finding Type:** `{f.finding_type.value}`  
+**Target URL:** `{f.target_url}`  
+**Affected Endpoints:** `{affected}`  
 **OWASP Category:** {f.owasp_category or 'N/A'}  
 **CWE ID:** {f.cwe_id or 'N/A'}  
+
+### Priority Rationale
+{f.priority_rationale}
 
 ### Description
 {f.description}
@@ -80,7 +105,7 @@ def display_finding_detail(f: VulnerabilityFinding) -> None:
 ### Potential Security Impact
 {f.impact}
 
-### Evidence
+### Evidence & Reproduction Artifact
 ```
 {f.evidence}
 ```
