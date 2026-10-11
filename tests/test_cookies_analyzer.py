@@ -33,6 +33,9 @@ def test_cookies_analyzer_detects_insecure_cookie():
 
     httponly_f = next(f for f in findings if f.finding_id == "SEC-CK-001-session_id")
     assert httponly_f.severity == SeverityLevel.HIGH  # Sensitive cookie marked HIGH
+    assert httponly_f.priority_rationale != ""
+    assert httponly_f.impact != ""
+    assert httponly_f.remediation != ""
 
 
 def test_cookies_analyzer_passes_hardened_cookie():
@@ -46,7 +49,7 @@ def test_cookies_analyzer_passes_hardened_cookie():
         response_body="{}",
         cookies=[
             {
-                "name": "secure_session",
+                "name": "__Host-session",
                 "value": "random_token_456",
                 "domain": "localhost",
                 "path": "/",
@@ -59,3 +62,24 @@ def test_cookies_analyzer_passes_hardened_cookie():
 
     findings = analyzer.analyze(transaction)
     assert len(findings) == 0
+
+
+def test_cookies_analyzer_handles_set_cookie_header_fallback():
+    analyzer = CookiesAnalyzer()
+    transaction = HTTPTransaction(
+        url="http://localhost:3000/",
+        method="GET",
+        request_headers={},
+        status_code=200,
+        response_headers={
+            "Set-Cookie": "auth_token=secret789; Path=/"
+        },
+        response_body="{}",
+        cookies=[],  # Empty list to trigger Set-Cookie header parsing
+    )
+
+    findings = analyzer.analyze(transaction)
+    finding_ids = [f.finding_id for f in findings]
+    assert "SEC-CK-001-auth_token" in finding_ids
+    assert "SEC-CK-002-auth_token" in finding_ids
+    assert "SEC-CK-003-auth_token" in finding_ids

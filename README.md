@@ -2,16 +2,16 @@
 
 A modular, defensive web application security analysis assistant written in Python for educational security research, vulnerability analysis, and remediation engineering.
 
-The tool audits HTTP request/response traffic against local training environments (such as **OWASP Juice Shop** or the built-in offline practice lab), identifies security weaknesses, explains the underlying vulnerability mechanisms, and generates professional vulnerability reports.
+Phase 1 features a **Streamlit Web Interface** for **passive offline HTTP response security analysis**. It accepts HTTP responses captured from local test applications or practice labs, analyzes them for missing security headers and cookie flags, explains each finding in plain English, provides actionable remediation snippets, and exports findings to **CSV** or **JSON**.
 
 ---
 
 ## 🔒 Scope Safeguards & Safety Boundaries
 
-This assistant is engineered exclusively for **defensive application security research and education**. It features an automated `ScopeGuard`:
-- **Strict Loopback Boundary**: All active HTTP audits are enforced to run only against authorized loopback targets (`localhost`, `127.0.0.1`, `::1`).
-- **External Domain Block**: Any attempt to target public or external domains (e.g. `example.com`, production APIs) is automatically blocked with a `ScopeViolationError`.
-- **Deliberate Rate Limiting**: Built-in request pacing prevents aggressive or destabilizing traffic bursts.
+This assistant is engineered exclusively for **defensive application security research and education**:
+- **Purely Passive Offline Analysis**: In Phase 1, no requests are dispatched to external websites or remote endpoints. All analysis occurs locally against captured HTTP response text.
+- **Strict Loopback Boundary**: For active audits in subsequent modules, the assistant enforces local loopback restrictions (`localhost`, `127.0.0.1`, `::1`). External targets are strictly blocked.
+- **Proportional Priority Assignment**: Missing defensive headers are prioritized as **Medium**, **Low**, or **Informational** with clear explanations. A missing header is **never automatically labeled as a Critical vulnerability**, as exploitation requires an accompanying injection flaw or active adversary.
 
 ---
 
@@ -19,13 +19,18 @@ This assistant is engineered exclusively for **defensive application security re
 
 ```
 appsec-research-assistant/
-├── README.md                      # Beginner-friendly documentation & guide
+├── app.py                         # 🌐 Streamlit Web Application (Phase 1 UI)
 ├── requirements.txt               # Project dependencies
+├── README.md                      # Complete installation & user guide
 ├── sample_audit_report.md         # Example generated audit report
+├── .streamlit/
+│   └── config.toml                # Headless & telemetry configurations
 ├── appsec_assistant/              # Core package
 │   ├── __init__.py
+│   ├── models.py                  # Models: VulnerabilityFinding, HTTPTransaction, SeverityLevel
+│   ├── response_parser.py         # HTTP response & cookie parser (raw text, headers, JSON)
+│   ├── samples.py                 # Realistic sample HTTP responses & presets for testing
 │   ├── config.py                  # Scope guard & boundary validation
-│   ├── models.py                  # Data models (VulnerabilityFinding, SeverityLevel, etc.)
 │   ├── client.py                  # Safe HTTP client with scope enforcement
 │   ├── engine.py                  # Audit orchestrator & finding aggregation
 │   ├── knowledge_base.py          # Educational encyclopedia (IDOR, XSS, SQLi, Auth, BAC)
@@ -34,21 +39,24 @@ appsec-research-assistant/
 │   ├── analyzers/                 # Modular security analyzers
 │   │   ├── __init__.py
 │   │   ├── base.py                # BaseAnalyzer abstract interface
-│   │   ├── headers_analyzer.py    # Audits CSP, HSTS, XFO, nosniff, CORS, server banners
-│   │   ├── cookies_analyzer.py    # Audits Secure, HttpOnly, SameSite cookie flags
+│   │   ├── headers_analyzer.py    # Audits CSP, HSTS, XCTO, Referrer-Policy, XFO, CORS, banners
+│   │   ├── cookies_analyzer.py    # Audits Secure, HttpOnly, SameSite flags, __Host- prefixes
 │   │   └── access_control_analyzer.py # Audits IDOR indicators & unauthenticated admin routes
 │   └── reporters/                 # Vulnerability reporting engine
 │       ├── __init__.py
-│       ├── markdown_reporter.py   # Formatted markdown report generator
-│       └── json_reporter.py       # Structured JSON report generator
-└── tests/                         # Automated unit test suite
+│       ├── csv_reporter.py        # Structured CSV report generator
+│       ├── json_reporter.py       # Structured JSON report generator
+│       └── markdown_reporter.py   # Formatted markdown report generator
+└── tests/                         # Automated unit test suite (100% passing)
     ├── __init__.py
-    ├── test_scope_guard.py
-    ├── test_headers_analyzer.py
-    ├── test_cookies_analyzer.py
+    ├── test_response_parser.py    # Tests raw HTTP & JSON parser
+    ├── test_csv_reporter.py       # Tests CSV export formatting
+    ├── test_headers_analyzer.py   # Tests headers (CSP, HSTS, XCTO, Referrer-Policy)
+    ├── test_cookies_analyzer.py   # Tests cookie attributes (Secure, HttpOnly, SameSite)
     ├── test_access_control_analyzer.py
     ├── test_knowledge_base.py
-    └── test_reporters.py
+    ├── test_reporters.py
+    └── test_scope_guard.py
 ```
 
 ---
@@ -58,111 +66,103 @@ appsec-research-assistant/
 ### 1. Prerequisites
 - Python 3.7+ installed.
 
-### 2. Setup Virtual Environment & Dependencies
+### 2. Setup Virtual Environment
 ```bash
+# Clone the repository (or navigate into the directory)
 cd appsec-research-assistant
 
-# Create a local virtual environment
+# Create a Python virtual environment
 python3 -m venv .venv
 
 # Activate the virtual environment
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate       # On Linux/macOS
+# or: .venv\Scripts\activate   # On Windows
+```
 
-# Install dependencies
+### 3. Install Dependencies
+```bash
 pip install -r requirements.txt
 ```
 
 ---
 
-## 💻 Usage
+## 🌐 Running Phase 1 (Streamlit Web Interface)
 
-### 1. Interactive Menu (Recommended)
-Launch the interactive terminal interface:
+To launch the web interface:
+
 ```bash
-python -m appsec_assistant.cli
+streamlit run app.py
 ```
 
-The interactive menu lets you:
-1. **Audit Built-in Practice Lab** (`http://127.0.0.1:5000`): Runs immediately without needing Docker or external software.
-2. **Audit OWASP Juice Shop** (`http://localhost:3000`): Audits your local Juice Shop container or instance.
-3. **Audit Custom Local Endpoint**: Inspect any custom endpoint on `localhost`.
-4. **View Findings & Evidence**: Browse discovered issues with reproduction steps, severity, and CWE codes.
-5. **Export Report**: Export a vulnerability assessment report to Markdown or JSON.
-6. **Explore Knowledge Base**: Read deep-dive guides explaining IDOR, XSS, SQLi, Authentication Flaws, and Broken Access Control with code-level fixes.
-7. **Test Scope Guard**: Verify that safeguards block attempts to scan external domains.
+The application will start locally at **`http://localhost:8501`**.
+
+### Features in the Web Interface:
+1. **Sample HTTP Response Presets**: Use the sidebar dropdown to instantly load realistic presets:
+   - *Insecure Legacy App (PHP/Apache)*: Missing all security headers; cookies lack `HttpOnly`, `Secure`, and `SameSite`.
+   - *Express API with CORS & Cookie Flaws*: Wildcard CORS origin `*`, JWT cookie missing `HttpOnly`.
+   - *Partially Configured App*: Contains weak CSP directives (`'unsafe-inline'`, `'unsafe-eval'`) and permissive Referrer-Policy.
+   - *Fully Hardened Enterprise App*: Enforces strict CSP with nonces, HSTS preload, strict-origin Referrer-Policy, and `__Host-` prefixed cookies.
+2. **Custom Input**: Paste any raw HTTP response (status line, headers, and body) or header block captured from your local app, proxy, or DevTools.
+3. **Interactive Findings Scorecard**: View total issues categorized by High, Medium, Low, and Informational priority.
+4. **Detailed Vulnerability Cards**: Expand each finding to review:
+   - Plain English description
+   - Potential impact and threat model
+   - Observed evidence snippet
+   - Copyable defensive remediation code blocks
+   - Rationale explaining the assigned priority
+   - OWASP Top 10 and CWE references
+5. **Parsed Headers & Cookies Table**: Inspect all parsed headers and cookie security flags in clean tabular format.
+6. **One-Click Report Export**: Download findings as **CSV** (for spreadsheets and tickets) or **JSON** (for automation and pipelines).
 
 ---
 
-### 2. Command-Line Options (Scripted Mode)
+## 🎯 Security Standards Evaluated (Phase 1)
 
-#### Run against the built-in practice lab and export Markdown report:
-```bash
-python -m appsec_assistant.cli --lab --export-md my_lab_report.md
-```
+### 1. Security Headers
+| Header | Default Severity | CWE | Defense-in-Depth Rationale |
+| :--- | :--- | :--- | :--- |
+| **Content-Security-Policy (CSP)** | **MEDIUM** | CWE-1021 | Mitigates Cross-Site Scripting (XSS) and data injection by restricting executable script contexts. Not Critical alone without an injection flaw. |
+| **X-Content-Type-Options: nosniff** | **LOW** | CWE-16 | Prevents MIME-confusion attacks and executable file-upload misinterpretation. |
+| **Strict-Transport-Security (HSTS)** | **MEDIUM / LOW** | CWE-523 | Protects against SSL stripping and man-in-the-middle downgrades on HTTPS. |
+| **Referrer-Policy** | **LOW** | CWE-116 | Prevents browsers from leaking private path tokens in HTTP `Referer` headers to external domains. |
+| **X-Frame-Options / frame-ancestors** | **MEDIUM** | CWE-1021 | Defends against Clickjacking (UI Redressing) by controlling iframing permissions. |
+| **Permissions-Policy** | **INFORMATIONAL** | CWE-16 | Proactively restricts browser device APIs (camera, microphone, geolocation). |
+| **Server / X-Powered-By Banners** | **LOW** | CWE-200 | Eliminates software version leakage that assists attacker reconnaissance. |
 
-#### Run against a running local OWASP Juice Shop:
-```bash
-python -m appsec_assistant.cli --target http://localhost:3000 --export-md juice_shop_report.md
-```
-
-#### Query the educational vulnerability knowledge base:
-```bash
-python -m appsec_assistant.cli --guide idor
-python -m appsec_assistant.cli --guide xss
-python -m appsec_assistant.cli --guide sqli
-python -m appsec_assistant.cli --guide auth
-python -m appsec_assistant.cli --guide broken_access_control
-```
-
----
-
-## 🧃 Running with OWASP Juice Shop
-
-To test the assistant against OWASP Juice Shop:
-
-1. **Start Juice Shop using Docker**:
-   ```bash
-   docker run -d -p 3000:3000 --name juice-shop bkimminich/juice-shop
-   ```
-   *(Or using Node.js: clone [juice-shop](https://github.com/juice-shop/juice-shop) and run `npm start`)*
-
-2. **Verify Juice Shop is running**:
-   Open `http://localhost:3000` in your browser.
-
-3. **Run the Audit**:
-   ```bash
-   python -m appsec_assistant.cli --target http://localhost:3000 --export-md juice_shop_audit.md
-   ```
+### 2. Cookie Security Flags
+| Attribute | Priority | CWE | Defensive Purpose |
+| :--- | :--- | :--- | :--- |
+| **HttpOnly** | **HIGH** *(sensitive)* / **MEDIUM** | CWE-1004 | Blocks JavaScript access (`document.cookie`) to prevent session theft via XSS. |
+| **Secure** | **MEDIUM** *(sensitive)* / **LOW** | CWE-614 | Ensures cookie is only transmitted over encrypted TLS (HTTPS) channels. |
+| **SameSite** | **MEDIUM** | CWE-1275 | Restricts cross-site transmission to defend against Cross-Site Request Forgery (CSRF). |
+| **Prefixes (`__Host-`)** | **INFORMATIONAL** | CWE-16 | Prevents cookie tossing and subdomain spoofing. |
 
 ---
 
-## 🧪 Running Unit Tests
+## 🧪 Running Automated Unit Tests
 
-Run the comprehensive unit test suite:
+Run the full pytest suite locally:
+
 ```bash
 pytest tests/
 ```
 
-All tests run locally in memory without making external network calls.
+All 22 unit tests run offline in memory in under 1 second without making network calls.
 
 ---
 
-## 📚 Vulnerability Concepts Covered
+## 💻 Alternative Terminal Interface (CLI & Mock Lab)
 
-| Vulnerability | OWASP Top 10 | CWE | Detection / Defensive Focus |
-| :--- | :--- | :--- | :--- |
-| **Insecure Direct Object References (IDOR)** | A01:2021 | CWE-639 | Predictable sequential IDs in URLs/APIs, object ownership verification |
-| **Broken Access Control** | A01:2021 | CWE-284, CWE-306 | Unauthenticated administrative endpoints, role-based access control |
-| **Security Headers Misconfiguration** | A05:2021 | CWE-1021, CWE-16 | Missing or weak CSP, X-Frame-Options (Clickjacking), X-Content-Type-Options |
-| **Cookie State Flaws** | A05:2021 | CWE-1004, CWE-614, CWE-1275 | Missing `HttpOnly`, `Secure`, and `SameSite` flags on session tokens |
-| **Cross-Site Scripting (XSS)** | A03:2021 | CWE-79 | Reflected, Stored, DOM XSS, context-aware encoding, nonce-based CSP |
-| **SQL Injection (SQLi)** | A03:2021 | CWE-89 | Query concatenation vs Parameterized Queries / Prepared Statements |
-| **Authentication & Session Flaws** | A07:2021 | CWE-287 | Session fixation, brute force exposure, token entropy & lifecycle |
+The project also includes a terminal CLI tool with a built-in offline lab server:
 
----
+```bash
+# Run audit against the offline practice lab
+python -m appsec_assistant.cli --lab
 
-## ⚖️ Defensive & Ethical Research Guidelines
+# Run interactive terminal menu
+python -m appsec_assistant.cli
 
-- **Authorization First**: Never test an application or API without explicit, authorized permission.
-- **Local Labs**: Always learn and validate security concepts on intentionally vulnerable applications (e.g. OWASP Juice Shop, WebGoat, DVWA, or the built-in practice lab).
-- **Constructive Remediation**: Professional security researchers focus on providing reproducible evidence, accurate risk assessments, and actionable engineering fixes to help developers secure their code.
+# Query educational vulnerability knowledge base
+python -m appsec_assistant.cli --guide idor
+python -m appsec_assistant.cli --guide xss
+```

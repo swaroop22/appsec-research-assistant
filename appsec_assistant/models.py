@@ -52,6 +52,7 @@ class VulnerabilityFinding:
     remediation: str
     cwe_id: Optional[str] = None
     owasp_category: Optional[str] = None
+    priority_rationale: str = ""
     references: List[str] = field(default_factory=list)
     timestamp: str = field(
         default_factory=lambda: datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -63,6 +64,7 @@ class VulnerabilityFinding:
             "title": self.title,
             "category": self.category,
             "severity": self.severity.value,
+            "priority_rationale": self.priority_rationale,
             "target_url": self.target_url,
             "description": self.description,
             "impact": self.impact,
