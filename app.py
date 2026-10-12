@@ -332,7 +332,7 @@ def main():
         if st.session_state.workflow_mode == WorkflowMode.OFFLINE:
             st.warning("⚠️ **Mode Notice:** Active training lab is disabled in OFFLINE mode. Switch to Mode B in sidebar.")
         else:
-            exercises = VulnerabilityKnowledgeBase.get_all_exercises()
+            exercises = VulnerabilityKnowledgeBase.list_exercises()
             ex_options = {f"{ex.category}: {ex.title}": ex for ex in exercises}
             selected_ex_label = st.selectbox("Select Guided Exercise:", list(ex_options.keys()))
             selected_ex = ex_options[selected_ex_label]

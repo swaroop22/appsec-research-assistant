@@ -456,6 +456,11 @@ class VulnerabilityKnowledgeBase:
         return list(EXERCISES_CATALOG.values())
 
     @staticmethod
+    def get_all_exercises() -> List[GuidedExercise]:
+        """Alias for list_exercises."""
+        return list(EXERCISES_CATALOG.values())
+
+    @staticmethod
     def get_exercise(exercise_id: str) -> Optional[GuidedExercise]:
         """Looks up a specific exercise by its ID."""
         return EXERCISES_CATALOG.get(exercise_id.upper())
