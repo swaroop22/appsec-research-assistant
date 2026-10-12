@@ -1,17 +1,20 @@
 """
-AppSec Research Assistant - Phase 4 AI-Assisted Vulnerability Triage Workflow.
+AppSec Research Assistant - Phase 5 Authorized Bug Bounty Research Workflow.
 
-A defensive web application security research and learning tool built with Streamlit.
+A defensive, program-aware web application security research and learning tool built with Streamlit.
 Includes:
-- Program Policy Manager with manual scope verification and fail-closed validation.
+- Safe Workflow Modes (Mode A: Offline, Mode B: Local Lab, Mode C: Authorized Program Preparation).
+- Program Policy Registry with eligible/excluded asset management, stale detection, and import/export.
 - Local Guided Security Exercises with synthetic accounts.
-- AI-Assisted Finding Triage Layer (Modular providers: Mock, OpenAI, Anthropic, Gemini, Local).
-- Grounded Evidence Verification (distinguishing Observation, Heuristic, Suspected, and Verified).
-- Human Review & Sign-Off Workflow and Sanitized Reporting (Markdown, JSON, CSV).
-- Semantic Duplicate Detection with human approval before merging.
+- AI-Assisted Finding Triage Layer (Mock, OpenAI, Anthropic, Gemini, Local).
+- Grounded Evidence Verification (Observation, Heuristic, Suspected, Verified).
+- Research Task Dashboard with lifecycle status, evidence completeness auditing, and duplicate reviews.
+- Policy-Aware Report Generator with preconditions, expected vs observed, impact, and sanitized export.
+- Human-Controlled Submission and Outcome Tracking.
 """
 
 import os
+import json
 import streamlit as st
 import pandas as pd
 import datetime
@@ -23,20 +26,40 @@ from appsec_assistant.models import (
     ConfidenceLevel,
     FindingType,
     FindingTier,
+    WorkflowMode,
+    ResearchStatus,
+    ResearchTask,
     TargetConfig,
     ProgramPolicy,
+    sanitize_evidence_text,
 )
 from appsec_assistant.response_parser import parse_raw_http_response
 from appsec_assistant.analyzers.headers_analyzer import HeadersAnalyzer
 from appsec_assistant.analyzers.cookies_analyzer import CookiesAnalyzer
 from appsec_assistant.analyzers.access_control_analyzer import AccessControlAnalyzer
 from appsec_assistant.knowledge_base import VulnerabilityKnowledgeBase, GuidedExercise
-from appsec_assistant.policy import ProgramPolicyManager, PolicyVerificationError, UnauthorizedTargetError
+from appsec_assistant.policy import (
+    ProgramPolicyManager,
+    PolicyVerificationError,
+    PolicyStaleError,
+    ScopeIntegrityError,
+    UnauthorizedTargetError,
+    create_sample_fictional_policy,
+)
 from appsec_assistant.engine import AuditEngine
 from appsec_assistant.lab_server import LocalLabServer, SYNTHETIC_ACCOUNTS
+from appsec_assistant.research import (
+    ResearchManager,
+    ReportReadinessError,
+    HumanConfirmationRequiredError,
+)
 from appsec_assistant.reporters.csv_reporter import CSVReporter
 from appsec_assistant.reporters.json_reporter import JSONReporter
 from appsec_assistant.reporters.markdown_reporter import MarkdownReporter
+from appsec_assistant.reporters.policy_report_generator import (
+    PolicyReportGenerator,
+    ResearcherReviewRequiredError,
+)
 from appsec_assistant.samples import SAMPLE_PRESETS
 
 from appsec_assistant.ai import (
@@ -51,7 +74,7 @@ from appsec_assistant.ai import (
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="AppSec Research Assistant | Phase 4",
+    page_title="AppSec Research Assistant | Phase 5",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -103,50 +126,29 @@ st.markdown("""
         font-weight: 700;
         border: 1px solid #CBD5E1;
     }
-    .badge-prio-critical {
-        background-color: #FEE2E2;
-        color: #991B1B;
-        padding: 3px 8px;
-        border-radius: 4px;
+    .badge-mode {
+        background-color: #EDE9FE;
+        color: #5B21B6;
+        padding: 4px 12px;
+        border-radius: 6px;
         font-weight: 700;
-        border: 1px solid #FCA5A5;
+        border: 1px solid #C4B5FD;
+        display: inline-block;
+        margin-bottom: 8px;
     }
-    .badge-prio-high {
-        background-color: #FFEDD5;
-        color: #C2410C;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-weight: 700;
-        border: 1px solid #FDBA74;
-    }
-    .badge-prio-med {
-        background-color: #FEF3C7;
-        color: #B45309;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-weight: 700;
-        border: 1px solid #FDE68A;
-    }
-    .badge-prio-low {
-        background-color: #DCFCE7;
-        color: #15803D;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-weight: 700;
-        border: 1px solid #86EFAC;
+    .card-task {
+        background-color: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
     .ai-box {
         background-color: #F0FDF4;
         border-left: 4px solid #10B981;
         padding: 12px 16px;
         margin-bottom: 12px;
-        border-radius: 0 8px 8px 0;
-    }
-    .review-box {
-        background-color: #F8FAFC;
-        border-left: 4px solid #3B82F6;
-        padding: 12px 16px;
-        margin-bottom: 15px;
         border-radius: 0 8px 8px 0;
     }
 </style>
@@ -160,8 +162,12 @@ if "current_transaction" not in st.session_state:
     st.session_state.current_transaction = None
 if "policy_manager" not in st.session_state:
     st.session_state.policy_manager = ProgramPolicyManager()
+if "research_manager" not in st.session_state:
+    st.session_state.research_manager = ResearchManager(st.session_state.policy_manager)
 if "target_url" not in st.session_state:
     st.session_state.target_url = "http://127.0.0.1:5000"
+if "workflow_mode" not in st.session_state:
+    st.session_state.workflow_mode = WorkflowMode.LOCAL_LAB
 if "ai_config" not in st.session_state:
     st.session_state.ai_config = AIProviderConfig(provider_type="mock")
 if "ai_enabled" not in st.session_state:
@@ -188,26 +194,52 @@ def analyze_http_response(raw_text: str, target_url: str) -> tuple:
 
 
 def main():
-    st.markdown('<div class="main-header">🛡️ AppSec Research Assistant — Phase 4</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🛡️ AppSec Research Assistant — Phase 5</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="sub-header">'
-        'AI-Assisted Vulnerability Triage, False Positive Identification, Manual Review Prioritization, '
-        'Semantic Duplicate Reviews, and Grounded Scope Verification.'
+        'Authorized Bug Bounty Research Workflow: Program Registry, Scope Verification, Safe Modes, '
+        'Research Task Dashboard, Evidence Completeness, and Policy-Aware Reporting.'
         '</div>',
         unsafe_allow_html=True
     )
 
-    # Sidebar: Scope & Policy Context
+    # Sidebar: Workflow Mode & Policy Context
     with st.sidebar:
-        st.header("⚙️ Boundary & Scope Guard")
-        st.info("🔒 **Loopback Confinement Active**\nAll active requests are strictly verified against local loopback (localhost / 127.0.0.1) and authorized program policies. Ambient proxies and external redirects are blocked.")
+        st.header("🚦 Safe Workflow Mode")
+        mode_choice = st.selectbox(
+            "Select Execution Mode:",
+            [
+                "Mode B: Local Lab (Loopback Training)",
+                "Mode A: Offline Analysis (Zero Network)",
+                "Mode C: Authorized Program Preparation",
+            ],
+            index=0,
+            help="Strict boundary modes ensuring authorization compliance.",
+        )
 
-        active_policies = [p for p in st.session_state.policy_manager.list_policies() if p.is_enabled and p.is_verified]
+        if "Mode A" in mode_choice:
+            st.session_state.workflow_mode = WorkflowMode.OFFLINE
+            st.markdown("<span class='badge-mode'>MODE A: OFFLINE</span>", unsafe_allow_html=True)
+            st.info("🔌 **Network Disabled:** Analyze saved HTTP responses and existing reports. Zero outbound network calls permitted.")
+        elif "Mode B" in mode_choice:
+            st.session_state.workflow_mode = WorkflowMode.LOCAL_LAB
+            st.markdown("<span class='badge-mode'>MODE B: LOCAL LAB</span>", unsafe_allow_html=True)
+            st.success("🔒 **Loopback Confinement:** Active testing strictly confined to loopback training lab (127.0.0.1 / localhost).")
+        else:
+            st.session_state.workflow_mode = WorkflowMode.AUTHORIZED_PROGRAM_PREPARATION
+            st.markdown("<span class='badge-mode'>MODE C: PROGRAM PREPARATION</span>", unsafe_allow_html=True)
+            st.warning("📋 **Preparation Only:** Scope review, research notes, finding mapping, and report drafts. Automated scanning is disabled.")
+
+        st.markdown("---")
+        st.header("⚙️ Boundary & Scope Guard")
+        active_policies = [p for p in st.session_state.policy_manager.list_policies() if p.is_enabled and p.is_verified and not p.is_stale()]
         if active_policies:
             st.success(f"✅ **Active Program:** {active_policies[0].program_name}")
-            st.caption(f"**Authorized Assets:** {', '.join(active_policies[0].authorized_assets[:2])}")
+            st.caption(f"**Eligible Assets:** {', '.join(active_policies[0].eligible_assets[:2])}")
+            if active_policies[0].excluded_assets:
+                st.caption(f"**Excluded Assets ({len(active_policies[0].excluded_assets)}):** {', '.join(active_policies[0].excluded_assets[:2])}")
         else:
-            st.warning("⚠️ No program policy currently enabled.")
+            st.warning("⚠️ No verified, non-stale program policy currently enabled.")
 
         st.markdown("---")
         st.markdown("### 🤖 AI Triage Status")
@@ -225,12 +257,13 @@ def main():
         """)
 
     # Main Tabs
-    tab_audit, tab_exercises, tab_triage, tab_review, tab_policy, tab_export = st.tabs([
+    tab_audit, tab_exercises, tab_triage, tab_review, tab_policy, tab_research, tab_export = st.tabs([
         "🔬 Security Analysis & Audit",
         "🎓 Guided Lab Exercises",
         "🤖 AI Triage & Analysis",
-        "📋 Finding Review & Human Sign-Off",
-        "📜 Program Policy Manager",
+        "📋 Finding Review & Sign-Off",
+        "📜 Program Policy Registry",
+        "🎯 Bug Bounty Research Tasks",
         "💾 Export Verified Reports",
     ])
 
@@ -258,295 +291,112 @@ def main():
             )
             st.session_state.target_url = target_url_input
 
-        preset_content = ""
         if selected_preset != "Custom Input":
-            preset_info = SAMPLE_PRESETS[selected_preset]
-            st.caption(f"**Scenario:** {preset_info['description']} | **Expected:** {preset_info['expected_issues']}")
-            preset_content = preset_info["content"]
+            default_text = SAMPLE_PRESETS[selected_preset]
+        else:
+            default_text = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body>Test</body></html>"
 
-        http_input = st.text_area(
-            label="HTTP Response Text",
-            value=preset_content if selected_preset != "Custom Input" else "",
-            height=200,
-            placeholder="HTTP/1.1 200 OK\nContent-Type: text/html\nSet-Cookie: session_id=abc; Path=/\n...",
+        raw_response_input = st.text_area(
+            "Raw HTTP Response Data:",
+            value=default_text,
+            height=180,
+            help="Paste HTTP headers and body.",
         )
 
-        col_run1, col_run2 = st.columns([1, 1])
-        with col_run1:
-            run_btn = st.button("🔍 Run Passive Analysis", type="primary", use_container_width=True)
-        with col_run2:
-            auto_triage = st.checkbox("Automatically run AI triage on discovered findings", value=True)
-
-        if run_btn:
-            if http_input.strip():
-                transaction, findings = analyze_http_response(http_input, st.session_state.target_url)
-                st.session_state.current_transaction = transaction
-                st.session_state.findings = findings
-
-                if auto_triage and st.session_state.ai_enabled:
-                    ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
-                    ai_service.triage_all(findings, source_transaction=transaction)
-                    st.success(f"Analysis complete! Discovered {len(findings)} findings and enriched with AI triage. Proceed to the 'AI Triage' tab.")
-                else:
-                    st.success(f"Analysis complete! Discovered {len(findings)} findings.")
-            else:
-                st.warning("Please paste an HTTP response or select a sample preset.")
+        if st.button("🚀 Analyze Response", type="primary"):
+            tx, findings = analyze_http_response(raw_response_input, target_url_input)
+            st.session_state.current_transaction = tx
+            st.session_state.findings = findings
+            st.success(f"Audit Complete! Identified {len(findings)} security observations/findings.")
 
         if st.session_state.findings:
-            st.markdown("#### Discovered Findings Overview")
-            rows = []
-            for f in st.session_state.findings:
-                ai_d = getattr(f, "ai_triage", None) or {}
-                rows.append({
-                    "ID": f.finding_id,
-                    "Tier": f.finding_tier.label,
-                    "Severity": f.severity.value,
-                    "AI Priority": ai_d.get("recommended_priority", "-"),
-                    "Confidence": f.confidence.value,
-                    "Title": f.title,
-                    "Human Reviewed": "✅ Yes" if f.human_reviewed else "⏳ Pending",
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.markdown("### 📋 Audit Findings Overview")
+            df = pd.DataFrame([{
+                "ID": f.finding_id,
+                "Tier": f.finding_tier.label,
+                "Severity": f.severity.value,
+                "Confidence": f.confidence.value,
+                "Category": f.category,
+                "Title": f.title,
+                "Reviewed": "✅ Yes" if f.human_reviewed else "⏳ Pending",
+            } for f in st.session_state.findings])
+            st.dataframe(df, use_container_width=True)
 
     # -------------------------------------------------------------
     # TAB 2: Guided Lab Exercises
     # -------------------------------------------------------------
     with tab_exercises:
-        st.subheader("🎓 Guided Local Educational Exercises")
-        st.caption("Practice defensive research across 6 core web security domains using synthetic data in the local training lab.")
+        st.subheader("🎓 Guided Local Practice Lab")
+        st.caption("Hands-on exercises executing strictly against local synthetic accounts on loopback.")
 
-        exercises = VulnerabilityKnowledgeBase.list_exercises()
-        ex_options = {f"{e.exercise_id}: {e.title}": e for e in exercises}
-        selected_ex_key = st.selectbox("Select Guided Security Exercise:", list(ex_options.keys()))
-        selected_ex: GuidedExercise = ex_options[selected_ex_key]
+        if st.session_state.workflow_mode == WorkflowMode.OFFLINE:
+            st.warning("⚠️ **Mode Notice:** Active training lab is disabled in OFFLINE mode. Switch to Mode B in sidebar.")
+        else:
+            exercises = VulnerabilityKnowledgeBase.get_all_exercises()
+            ex_options = {f"{ex.category}: {ex.title}": ex for ex in exercises}
+            selected_ex_label = st.selectbox("Select Guided Exercise:", list(ex_options.keys()))
+            selected_ex = ex_options[selected_ex_label]
 
-        col_ex_info, col_ex_act = st.columns([2, 1])
-        with col_ex_info:
-            st.markdown(f"### {selected_ex.title}")
-            st.markdown(f"**Category:** `{selected_ex.category}` | **Target Endpoint:** `{selected_ex.target_endpoint}` | **Expected Tier:** `{selected_ex.expected_tier.label}`")
-            st.write(selected_ex.learning_context)
+            st.markdown(f"**Exercise Description:** {selected_ex.description}")
+            st.markdown(f"**Target Local Route:** `{selected_ex.endpoint}` ({selected_ex.http_method})")
+            st.markdown(f"**Defensive Goal:** {selected_ex.remediation_summary}")
 
-            st.markdown("#### 🎯 Exercise Objective")
-            st.info(selected_ex.objective)
-
-            st.markdown("#### 🧪 Synthetic Test Accounts & Data")
-            if selected_ex.test_accounts:
-                st.json(selected_ex.test_accounts)
-            else:
-                st.write("No authenticated account required (anonymous audit).")
-
-            st.markdown("#### 📝 Step-by-Step Reproduction Guide")
-            for step in selected_ex.reproduction_steps:
-                st.markdown(f"- {step}")
-
-            st.markdown("#### 🛡️ Defensive Remediation Summary")
-            st.success(selected_ex.remediation_summary)
-
-        with col_ex_act:
-            st.markdown("### 🚀 Execute Exercise")
-            st.write("Run this exercise safely against the local practice lab on loopback.")
-            if st.button(f"Run {selected_ex.exercise_id} Against Lab", type="primary", use_container_width=True):
-                lab = LocalLabServer(port=5000)
-                try:
+            if st.button("▶️ Execute Guided Exercise in Local Lab", type="secondary"):
+                with st.spinner("Starting local lab container on port 5000..."):
+                    lab = LocalLabServer(port=5000)
                     lab.start()
-                    config = TargetConfig(base_url="http://127.0.0.1:5000")
-                    engine = AuditEngine(config, policy_manager=st.session_state.policy_manager)
-                    discovered = engine.audit_exercise(selected_ex)
-                    
-                    if st.session_state.ai_enabled:
-                        ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
-                        ai_service.triage_all(discovered)
-
-                    st.session_state.findings = discovered
-                    st.session_state.target_url = f"http://127.0.0.1:5000{selected_ex.target_endpoint}"
-                    st.success(f"Exercise executed! Captured {len(discovered)} findings for `{selected_ex.target_endpoint}`.")
-                finally:
-                    lab.stop()
-
-                st.markdown("#### Discovered Findings for Exercise")
-                for f in st.session_state.findings:
-                    ai_info = getattr(f, "ai_triage", None) or {}
-                    prio_badge = f" [Priority: {ai_info.get('recommended_priority', '-')}]" if ai_info else ""
-                    st.markdown(f"- **[{f.finding_tier.label}]** `{f.finding_id}` — {f.title} ({f.severity.value}){prio_badge}")
+                    try:
+                        cfg = TargetConfig(base_url="http://127.0.0.1:5000")
+                        engine = AuditEngine(cfg, policy_manager=st.session_state.policy_manager)
+                        ex_findings = engine.audit_exercise(selected_ex)
+                        st.session_state.findings = ex_findings
+                        st.success(f"Exercise complete! Captured {len(ex_findings)} findings.")
+                    finally:
+                        lab.stop()
+                    st.rerun()
 
     # -------------------------------------------------------------
-    # TAB 3: AI Triage & Analysis (Phase 4)
+    # TAB 3: AI Triage & Analysis
     # -------------------------------------------------------------
     with tab_triage:
         st.subheader("🤖 AI-Assisted Finding Triage & Analysis")
-        st.caption(
-            "Evidence-grounded triage: Explains findings in plain English, identifies false positives, "
-            "prioritizes manual investigation, and detects semantic duplicates."
-        )
+        st.caption("Deterministic findings enriched with false positive analysis, reproduction steps, and duplicate detection.")
 
-        with st.expander("⚙️ AI Provider & Consent Configuration", expanded=False):
-            col_p1, col_p2 = st.columns(2)
-            with col_p1:
-                provider_choice = st.selectbox(
-                    "AI Provider:",
-                    ["mock", "openai", "anthropic", "gemini", "local"],
-                    index=["mock", "openai", "anthropic", "gemini", "local"].index(st.session_state.ai_config.provider_type),
-                    help="Select the language model provider. 'mock' runs offline without API keys.",
-                )
-                api_key_input = st.text_input(
-                    "API Key (Optional / Environment Overridable):",
-                    type="password",
-                    value=st.session_state.ai_config.api_key or "",
-                    help="Never committed or hardcoded. Can also be set via OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY.",
-                )
-            with col_p2:
-                model_name_input = st.text_input(
-                    "Model Name (Optional):",
-                    value=st.session_state.ai_config.model_name or "",
-                    placeholder="e.g. gpt-4o-mini, claude-3-haiku-20240307, gemini-1.5-flash",
-                )
-                endpoint_url_input = st.text_input(
-                    "Local Endpoint URL (Local Provider Only):",
-                    value=st.session_state.ai_config.endpoint_url or "http://127.0.0.1:11434/v1/chat/completions",
-                )
-
-            consent_checkbox = st.checkbox(
-                "🔒 I explicitly consent to transmitting sanitized finding data to external AI providers (Required for OpenAI / Anthropic / Gemini).",
-                value=st.session_state.ai_config.consent_given,
-            )
-
-            if st.button("Save AI Configuration"):
-                st.session_state.ai_config.provider_type = provider_choice
-                st.session_state.ai_config.api_key = api_key_input or None
-                st.session_state.ai_config.model_name = model_name_input or None
-                st.session_state.ai_config.endpoint_url = endpoint_url_input or None
-                st.session_state.ai_config.consent_given = consent_checkbox
-                st.success("AI Provider configuration saved!")
-                st.rerun()
-
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            if st.button("🚀 Run AI Triage on All Findings", type="primary", use_container_width=True):
-                if not st.session_state.findings:
-                    st.warning("No findings loaded to triage. Run an audit first.")
-                else:
-                    try:
-                        ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
-                        with st.spinner("Analyzing findings and grounding evidence..."):
-                            ai_service.triage_all(st.session_state.findings, source_transaction=st.session_state.current_transaction)
-                        st.success(f"Successfully generated AI triage across {len(st.session_state.findings)} findings!")
-                        st.rerun()
-                    except ConsentRequiredError as cre:
-                        st.error(f"Consent Required: {cre}")
-
-        with col_t2:
-            if st.button("🔍 Detect Semantic Duplicates", use_container_width=True):
-                if not st.session_state.findings:
-                    st.warning("No findings available for duplicate detection.")
-                else:
-                    ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
-                    st.session_state.ai_duplicates = ai_service.detect_duplicates(st.session_state.findings)
-                    if st.session_state.ai_duplicates:
-                        st.info(f"Identified {len(st.session_state.ai_duplicates)} potential duplicate pair(s).")
-                    else:
-                        st.success("No semantic duplicates found across active findings.")
-
-        # Display Semantic Duplicate Review Section
-        if st.session_state.ai_duplicates:
-            st.markdown("### 👥 Suggested Semantic Duplicates (Human Review Required)")
-            st.caption("AI identifies potential duplicates based on root cause similarity. Review and approve before merging.")
-
-            for d_idx, sug in enumerate(st.session_state.ai_duplicates):
-                with st.container():
-                    st.markdown(f"#### Suggestion `{sug.suggestion_id}`: Similarity `{sug.similarity_score * 100:.0f}%`")
-                    st.write(f"**Primary Finding:** `{sug.primary_finding_id}` &nbsp;|&nbsp; **Duplicate Finding:** `{sug.duplicate_finding_id}`")
-                    st.write(f"**Shared Root Cause:** {sug.shared_root_cause}")
-                    st.info(f"**Rationale:** {sug.similarity_rationale}")
-
-                    if not sug.is_approved:
-                        col_m1, col_m2 = st.columns([1, 4])
-                        with col_m1:
-                            if st.button("Approve & Merge", key=f"app_merge_{d_idx}", type="primary"):
-                                primary = next((f for f in st.session_state.findings if f.finding_id == sug.primary_finding_id), None)
-                                dup = next((f for f in st.session_state.findings if f.finding_id == sug.duplicate_finding_id), None)
-                                if primary and dup and primary != dup:
-                                    AIService.approve_duplicate(sug, reviewer="Security Auditor")
-                                    AIService.merge_duplicates(primary, dup)
-                                    st.session_state.findings.remove(dup)
-                                    st.session_state.ai_duplicates.remove(sug)
-                                    st.success(f"Merged `{sug.duplicate_finding_id}` into `{sug.primary_finding_id}`! All URLs and evidence preserved.")
-                                    st.rerun()
-                        with col_m2:
-                            if st.button("Keep Separate", key=f"rej_merge_{d_idx}"):
-                                st.session_state.ai_duplicates.remove(sug)
-                                st.rerun()
-                    st.markdown("---")
-
-        # Display Finding Triage Cards
         if not st.session_state.findings:
-            st.info("No findings available to display.")
+            st.info("No findings currently loaded. Analyze a response in Tab 1 or run an exercise in Tab 2.")
         else:
-            st.markdown("### 📋 Evidence-Grounded Finding Triages")
-            for idx, f in enumerate(st.session_state.findings):
-                ai_data = getattr(f, "ai_triage", None)
-                prio_str = ai_data.get("recommended_priority", "MEDIUM") if ai_data else "-"
-                
-                header_title = f"[{f.severity.value}] [Priority: {prio_str}] [{f.finding_tier.label}] {f.title} ({f.finding_id})"
-                with st.expander(header_title, expanded=(idx == 0)):
-                    if not ai_data:
-                        st.info("AI triage has not been executed for this finding yet. Click 'Run AI Triage on All Findings' above.")
-                    else:
-                        st.markdown(f"<div class='ai-box'><b>Plain-English Summary:</b> {ai_data['plain_english_explanation']}</div>", unsafe_allow_html=True)
+            col_ai_run, col_dup_run = st.columns(2)
+            with col_ai_run:
+                if st.button("🧠 Run AI Triage Across Findings", type="primary"):
+                    with st.spinner("Running AI triage service..."):
+                        service = AIService(st.session_state.ai_config, fallback_to_mock=True)
+                        service.triage_all(st.session_state.findings)
+                        st.success("AI Triage complete!")
+                        st.rerun()
+            with col_dup_run:
+                if st.button("🔍 Detect Semantic Duplicates", type="secondary"):
+                    with st.spinner("Analyzing semantic similarity..."):
+                        service = AIService(st.session_state.ai_config, fallback_to_mock=True)
+                        st.session_state.ai_duplicates = service.detect_duplicates(st.session_state.findings)
+                        st.info(f"Detected {len(st.session_state.ai_duplicates)} duplicate suggestion(s).")
+                        st.rerun()
 
-                        col_ev1, col_ev2 = st.columns(2)
-                        with col_ev1:
-                            st.markdown("#### 🔬 Observed Evidence")
-                            st.code(ai_data["observed_evidence"], language="text")
-                            st.markdown("#### 💥 Realistic Potential Impact")
-                            st.write(ai_data["realistic_potential_impact"])
-                        with col_ev2:
-                            st.markdown("#### 🛡️ Why Evidence Matters")
-                            st.write(ai_data["why_evidence_matters"])
-                            st.markdown("#### 🔍 Alternative Explanations")
-                            st.write(ai_data["alternative_explanations"])
-
-                        # Missing information & Verification Alert
-                        if ai_data.get("needs_manual_verification"):
-                            st.warning(f"⚠️ **Verification Required:** {ai_data.get('missing_information', 'Needs manual verification')}")
-                        else:
-                            st.success(f"✅ **Evidence Verified:** {ai_data.get('missing_information', 'Sufficient evidence provided.')}")
-
-                        # False positive assessment
-                        if ai_data.get("potential_false_positive"):
-                            st.error(f"🚩 **Potential False Positive Flag:** {ai_data.get('false_positive_explanation')}")
-                        else:
-                            st.info("✅ **Low False Positive Risk:** Deterministic signature correlates directly with verified technical condition.")
-
-                        # Recommended next steps
-                        st.markdown("#### 🎯 Recommended Manual Verification Steps")
-                        for step in ai_data.get("recommended_next_steps", []):
-                            st.markdown(f"- {step}")
-
-                        # Remediation
-                        st.markdown("#### 🛠️ Suggested Defensive Remediation")
-                        st.markdown(ai_data["suggested_remediation"])
-
-                        # Distinct Concept Rationales
-                        st.markdown("---")
-                        col_r1, col_r2, col_r3 = st.columns(3)
-                        col_r1.markdown(f"**Confidence ({f.confidence.value}):**\n\n{ai_data['confidence_rationale']}")
-                        col_r2.markdown(f"**Severity ({f.severity.value}):**\n\n{ai_data['severity_rationale']}")
-                        col_r3.markdown(f"**Priority ({ai_data['recommended_priority']}):**\n\n{ai_data['recommended_priority_rationale']}")
+            for f in st.session_state.findings:
+                if f.ai_triage:
+                    with st.expander(f"AI Triage: {f.title} ({f.finding_id})", expanded=False):
+                        st.markdown(f"**Recommended Priority:** `{f.ai_triage.get('recommended_priority', 'MEDIUM')}`")
+                        st.markdown(f"**Summary:** {f.ai_triage.get('summary', '')}")
+                        st.markdown(f"**Verification Plan:** {f.ai_triage.get('reproduction_verification', '')}")
 
     # -------------------------------------------------------------
-    # TAB 4: Finding Review & Human Sign-Off
+    # TAB 4: Finding Review & Sign-Off
     # -------------------------------------------------------------
     with tab_review:
-        st.subheader("📋 Finding Review & Human Verification Screen")
+        st.subheader("📋 Finding Review & Human Auditor Sign-Off")
         st.caption("Inspect reproduction steps, sanitized evidence, and sign off as a human security auditor before report generation.")
 
-        st.warning(
-            "⚠️ **Responsible Disclosure Requirement:** Human review is strictly required before any report is submitted externally. "
-            "Never claim a vulnerability is confirmed without reproducible supporting evidence."
-        )
-
         if not st.session_state.findings:
-            st.info("No findings currently loaded. Run an analysis from Tab 1 or an exercise from Tab 2.")
+            st.info("No findings currently loaded.")
         else:
             reviewed_count = sum(1 for f in st.session_state.findings if f.human_reviewed)
             total_count = len(st.session_state.findings)
@@ -554,136 +404,257 @@ def main():
             st.caption(f"**Review Progress:** {reviewed_count} of {total_count} findings verified by human auditor.")
 
             for idx, f in enumerate(st.session_state.findings):
-                tier_badge_class = {
-                    FindingTier.INDEPENDENTLY_VERIFIED: "badge-verified",
-                    FindingTier.SUSPECTED_VULNERABILITY: "badge-suspected",
-                    FindingTier.HEURISTIC_INDICATOR: "badge-heuristic",
-                    FindingTier.OBSERVATION: "badge-observation",
-                }.get(f.finding_tier, "badge-observation")
-
-                ai_d = getattr(f, "ai_triage", None) or {}
-                prio_str = ai_d.get("recommended_priority", "-")
-
-                header_str = f"[{f.severity.value}] [Priority: {prio_str}] [{f.finding_tier.label}] {f.title} ({f.finding_id})"
-                with st.expander(header_str, expanded=(not f.human_reviewed)):
-                    st.markdown(
-                        f"<span class='{tier_badge_class}'>{f.finding_tier.label}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
-                        f"**Severity:** `{f.severity.value}` &nbsp;&nbsp;|&nbsp;&nbsp; "
-                        f"**AI Priority:** `{prio_str}` &nbsp;&nbsp;|&nbsp;&nbsp; "
-                        f"**Confidence:** `{f.confidence.value}` &nbsp;&nbsp;|&nbsp;&nbsp; "
-                        f"**Human Status:** {'✅ Verified' if f.human_reviewed else '⏳ Pending Review'}",
-                        unsafe_allow_html=True
-                    )
-
-                    st.markdown("#### 🎯 Priority & Severity Rationale")
-                    st.write(f.priority_rationale)
-
+                with st.expander(f"[{f.severity.value}] {f.title} ({f.finding_id})", expanded=(not f.human_reviewed)):
+                    st.markdown(f"**Finding Tier:** `{f.finding_tier.label}` | **Confidence:** `{f.confidence.value}`")
                     st.markdown("#### 🔬 Step-by-Step Reproduction Guide")
                     for step in f.reproduction_steps:
                         st.markdown(f"- {step}")
 
-                    st.markdown("#### 🛡️ Sanitized Evidence (Tokens & Secrets Redacted)")
+                    st.markdown("#### 🛡️ Sanitized Evidence (Secrets & PII Redacted)")
                     st.code(f.sanitized_evidence or f.evidence, language="http")
 
-                    st.markdown("#### 🛠️ Recommended Defensive Remediation")
-                    st.markdown(f.remediation)
-
-                    st.markdown("---")
                     st.markdown("#### ✍️ Human Auditor Sign-Off")
-                    col_rev_name, col_rev_notes = st.columns([1, 2])
-                    with col_rev_name:
-                        rev_name = st.text_input(f"Reviewer Name (#{idx}):", value=f.reviewed_by or "Security Researcher", key=f"rev_name_{idx}")
-                    with col_rev_notes:
-                        rev_notes = st.text_input(f"Review Notes (#{idx}):", value=f.review_notes or "Evidence verified; does not violate program policy.", key=f"rev_notes_{idx}")
+                    col_r1, col_r2 = st.columns([1, 2])
+                    with col_r1:
+                        r_name = st.text_input(f"Auditor Name (#{idx}):", value=f.reviewed_by or "Lead Researcher", key=f"aud_name_{idx}")
+                    with col_r2:
+                        r_notes = st.text_input(f"Auditor Notes (#{idx}):", value=f.review_notes or "Evidence verified; does not violate program policy.", key=f"aud_notes_{idx}")
 
                     col_chk, col_btn = st.columns([3, 1])
                     with col_chk:
-                        confirmed_chk = st.checkbox(
+                        chk_val = st.checkbox(
                             "I have verified the evidence, confirmed reproducible steps, and validated scope authorization.",
                             value=f.human_reviewed,
-                            key=f"chk_{idx}"
+                            key=f"aud_chk_{idx}",
                         )
                     with col_btn:
-                        if st.button("Save Verification", key=f"btn_save_{idx}", type="secondary"):
-                            f.human_reviewed = confirmed_chk
-                            f.reviewed_by = rev_name
-                            f.review_notes = rev_notes
+                        if st.button("Save Sign-Off", key=f"aud_btn_{idx}", type="secondary"):
+                            f.human_reviewed = chk_val
+                            f.reviewed_by = r_name
+                            f.review_notes = r_notes
                             f.review_date = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-                            st.success(f"Updated review status for {f.finding_id}!")
+                            st.success("Sign-off saved!")
                             st.rerun()
 
     # -------------------------------------------------------------
-    # TAB 5: Program Policy Manager
+    # TAB 5: Program Policy Registry
     # -------------------------------------------------------------
     with tab_policy:
-        st.subheader("📜 Vulnerability Disclosure Program Policy Manager")
-        st.caption("Manage program URLs, authorized scopes, rate limits, and prohibited methods. Requires manual scope sign-off before enablement.")
+        st.subheader("📜 Bug Bounty Program Policy Registry")
+        st.caption("Store company policies, eligible asset allowlists, excluded asset boundaries, rate limits, and reporting requirements.")
 
+        col_top1, col_top2 = st.columns(2)
+        with col_top1:
+            if st.button("📥 Load Acme FinTech Sample Bounty Policy", type="secondary"):
+                sample = create_sample_fictional_policy()
+                st.session_state.policy_manager.add_policy(sample)
+                st.success("Loaded Acme FinTech sample policy into registry!")
+                st.rerun()
+        with col_top2:
+            with st.popover("📤 Import Policy Document (JSON)"):
+                uploaded_file = st.file_uploader("Upload Policy JSON:", type=["json"])
+                if uploaded_file is not None:
+                    try:
+                        content = uploaded_file.read().decode("utf-8")
+                        imported = st.session_state.policy_manager.import_policy_from_json(content)
+                        st.success(f"Imported policy '{imported.program_name}'!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Import failed: {e}")
+
+        st.markdown("---")
         policies = st.session_state.policy_manager.list_policies()
 
-        st.markdown("### Configured Program Policies")
         for p in policies:
             with st.container():
-                st.markdown(f"#### {p.program_name} (`{p.program_id}`)")
+                st.markdown(f"### {p.program_name} (`{p.program_id}`)")
                 col_p1, col_p2, col_p3 = st.columns(3)
-                col_p1.markdown(f"**Organization:** {p.organization}")
-                col_p2.markdown(f"**Status:** {'✅ ENABLED' if p.is_enabled else '⏸️ DISABLED'}")
-                col_p3.markdown(f"**Verified:** {'✅ YES' if p.is_verified else '❌ NO'}")
+                col_p1.markdown(f"**Company:** {p.company_name or p.organization}")
+                col_p2.markdown(f"**Policy Version:** `{p.policy_version}`")
+                stale_status = "⚠️ STALE (>90d)" if p.is_stale() else "🟢 FRESH"
+                col_p3.markdown(f"**Verification:** {'✅ YES' if p.is_verified else '❌ NO'} ({stale_status})")
 
-                st.markdown(f"**Policy URL:** [{p.policy_url}]({p.policy_url})")
-                st.markdown(f"**Authorized Asset Scopes:** `{', '.join(p.authorized_assets)}`")
-                st.markdown(f"**Prohibited Methods:** {', '.join(p.prohibited_methods)}")
-                st.markdown(f"**Rate Limit:** `{p.rate_limit_rps}` req/sec")
+                st.markdown(f"- **Official Policy URL:** [{p.policy_url}]({p.policy_url})")
+                st.markdown(f"- **Eligible Assets Allowlist ({len(p.eligible_assets)}):** `{', '.join(p.eligible_assets)}`")
+                if p.excluded_assets:
+                    st.markdown(f"- **Explicitly Excluded Assets ({len(p.excluded_assets)}):** `{', '.join(p.excluded_assets)}`")
+                st.markdown(f"- **Prohibited Methods:** {', '.join(p.prohibited_methods)}")
+                st.markdown(f"- **Rate Limit:** `{p.rate_limit_rps}` requests/sec")
+                if p.testing_restrictions:
+                    st.markdown(f"- **Testing Restrictions:** {', '.join(p.testing_restrictions)}")
+                st.markdown(f"- **Reporting Instructions:** {p.reporting_instructions or p.policy_url}")
 
                 if p.is_verified:
                     st.info(f"Verified by **{p.verified_by}** on {p.verification_date}: {p.verification_notes}")
                 else:
-                    st.warning("⚠️ Scope not yet manually verified. Policy cannot be enabled until verified.")
+                    st.warning("⚠️ Scope unverified. Must be manually verified by a researcher before enablement.")
 
-                col_b1, col_b2 = st.columns(2)
+                col_b1, col_b2, col_b3 = st.columns(3)
                 with col_b1:
-                    if not p.is_verified:
-                        with st.popover("✍️ Verify Program Scope"):
-                            st.write(f"Record human verification for `{p.program_id}`:")
-                            v_name = st.text_input("Reviewer Name:", value="Security Engineer", key=f"v_name_{p.program_id}")
-                            v_notes = st.text_area("Verification Notes:", value="Verified that policy URL is authentic and scope assets match local training target.", key=f"v_notes_{p.program_id}")
-                            if st.button("Confirm Verification & Enable", key=f"v_btn_{p.program_id}"):
-                                try:
-                                    st.session_state.policy_manager.verify_policy(p.program_id, v_name, v_notes)
-                                    st.session_state.policy_manager.enable_policy(p.program_id)
-                                    st.success(f"Verified and enabled {p.program_id}!")
-                                    st.rerun()
-                                except PolicyVerificationError as pve:
-                                    st.error(str(pve))
+                    with st.popover("✍️ Verify Program Scope"):
+                        st.write(f"Record human verification for `{p.program_id}`:")
+                        v_name = st.text_input("Reviewer Name:", value="Security Engineer", key=f"pv_name_{p.program_id}")
+                        v_notes = st.text_area("Verification Notes:", value="Verified policy URL is authentic, scope matches declared boundaries.", key=f"pv_notes_{p.program_id}")
+                        if st.button("Confirm Verification & Enable", key=f"pv_btn_{p.program_id}"):
+                            try:
+                                st.session_state.policy_manager.verify_policy(p.program_id, v_name, v_notes)
+                                st.session_state.policy_manager.enable_policy(p.program_id)
+                                st.success(f"Verified and enabled {p.program_id}!")
+                                st.rerun()
+                            except Exception as ex:
+                                st.error(str(ex))
                 with col_b2:
                     if p.is_enabled:
-                        if st.button("Disable Policy", key=f"dis_{p.program_id}"):
+                        if st.button("Disable Policy", key=f"pdis_{p.program_id}"):
                             st.session_state.policy_manager.disable_policy(p.program_id)
                             st.rerun()
-                    elif p.is_verified:
-                        if st.button("Enable Policy", key=f"en_{p.program_id}"):
+                    elif p.is_verified and not p.is_stale():
+                        if st.button("Enable Policy", key=f"pen_{p.program_id}"):
                             st.session_state.policy_manager.enable_policy(p.program_id)
                             st.rerun()
-
+                with col_b3:
+                    policy_json = st.session_state.policy_manager.export_policy_to_json(p.program_id)
+                    st.download_button(
+                        "💾 Export Policy JSON",
+                        data=policy_json,
+                        file_name=f"{p.program_id}_policy.json",
+                        mime="application/json",
+                        key=f"pdl_{p.program_id}",
+                    )
                 st.markdown("---")
 
     # -------------------------------------------------------------
-    # TAB 6: Export Verified Reports
+    # TAB 6: Bug Bounty Research Tasks Dashboard
+    # -------------------------------------------------------------
+    with tab_research:
+        st.subheader("🎯 Bug Bounty Research Task Manager")
+        st.caption("Manage research tasks, evidence completeness, duplicate reviews, report readiness gates, and submission tracking.")
+
+        policies = st.session_state.policy_manager.list_policies()
+        policy_ids = [p.program_id for p in policies]
+
+        if not policy_ids:
+            st.warning("No policies configured in registry.")
+        else:
+            col_sel_p, col_conv = st.columns([2, 1])
+            with col_sel_p:
+                selected_pid = st.selectbox("Select Target Bug Bounty Program:", policy_ids)
+            with col_conv:
+                if st.button("➕ Convert Current Findings to Tasks", type="primary"):
+                    created_count = 0
+                    for f in st.session_state.findings:
+                        if not f.research_task_id:
+                            st.session_state.research_manager.create_task_from_finding(
+                                program_id=selected_pid,
+                                finding=f,
+                            )
+                            created_count += 1
+                    st.success(f"Created {created_count} research tasks under '{selected_pid}'!")
+                    st.rerun()
+
+            tasks = st.session_state.research_manager.list_tasks(program_id=selected_pid)
+
+            if not tasks:
+                st.info(f"No research tasks recorded for '{selected_pid}'. Use button above to convert findings.")
+            else:
+                st.markdown(f"### Active Research Tasks ({len(tasks)})")
+
+                for t in tasks:
+                    with st.container():
+                        st.markdown(f"#### [{t.status.value}] {t.title} (`{t.task_id}`)")
+                        col_t1, col_t2, col_t3 = st.columns(3)
+                        col_t1.markdown(f"**Affected Asset:** `{t.affected_asset}`")
+                        col_t2.markdown(f"**Severity:** `{t.severity.value}` | **Confidence:** `{t.confidence.value}`")
+                        col_t3.markdown(f"**Report Ready:** {'✅ YES' if t.report_ready else '❌ NO'}")
+
+                        # Evidence Completeness Progress Bar
+                        st.markdown(f"**Evidence Completeness Score:** `{t.evidence_completeness_score:.2f}` / `1.00`")
+                        st.progress(t.evidence_completeness_score)
+                        if not t.report_ready:
+                            st.caption(f"**Readiness Audit Notes:** {t.report_readiness_notes}")
+
+                        # Next Verification Step
+                        st.markdown(f"**Next Manual Verification Step:** {t.next_manual_verification_step or 'None recorded.'}")
+
+                        # Status and Action Controls
+                        col_act1, col_act2, col_act3 = st.columns(3)
+                        with col_act1:
+                            all_statuses = [s.value for s in ResearchStatus]
+                            current_idx = all_statuses.index(t.status.value)
+                            new_st_val = st.selectbox("Update Status:", all_statuses, index=current_idx, key=f"st_sel_{t.task_id}")
+                            if new_st_val != t.status.value:
+                                try:
+                                    # Human confirmation for submitted or terminal states
+                                    requires_conf = new_st_val in [
+                                        ResearchStatus.SUBMITTED_BY_RESEARCHER.value,
+                                        ResearchStatus.ACCEPTED.value,
+                                        ResearchStatus.REJECTED.value,
+                                        ResearchStatus.DUPLICATE.value,
+                                        ResearchStatus.RESOLVED.value,
+                                    ]
+                                    st.session_state.research_manager.update_task_status(
+                                        task_id=t.task_id,
+                                        new_status=ResearchStatus(new_st_val),
+                                        user_confirmed=requires_conf,
+                                    )
+                                    st.success(f"Status updated to {new_st_val}!")
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(str(err))
+
+                        with col_act2:
+                            with st.popover("📤 Record Official Submission"):
+                                st.write("Record manual submission to program team:")
+                                sub_dest = st.text_input("Reporting Destination:", value=t.submission_destination, key=f"sdest_{t.task_id}")
+                                sub_ref = st.text_input("Report Reference / Ticket #:", value="H1-REPORT-12345", key=f"sref_{t.task_id}")
+                                conf_chk = st.checkbox("I confirm I have manually submitted this report to the program destination.", key=f"cchk_{t.task_id}")
+                                if st.button("Confirm Submission", key=f"sbtn_{t.task_id}"):
+                                    if not conf_chk:
+                                        st.error("Human confirmation checkbox required.")
+                                    else:
+                                        try:
+                                            st.session_state.research_manager.record_submission(
+                                                task_id=t.task_id,
+                                                submission_reference=sub_ref,
+                                                submission_destination=sub_dest,
+                                                user_confirmed=True,
+                                            )
+                                            st.success("Submission recorded!")
+                                            st.rerun()
+                                        except Exception as e_sub:
+                                            st.error(str(e_sub))
+
+                        with col_act3:
+                            with st.popover("🏁 Record Program Outcome"):
+                                st.write("Record program response / triage outcome:")
+                                out_choice = st.selectbox("Outcome:", [ResearchStatus.ACCEPTED.value, ResearchStatus.REJECTED.value, ResearchStatus.DUPLICATE.value, ResearchStatus.RESOLVED.value], key=f"out_sel_{t.task_id}")
+                                out_notes = st.text_input("Outcome Notes:", value="Accepted by security team.", key=f"onotes_{t.task_id}")
+                                conf_out = st.checkbox("I confirm this outcome was communicated by the program.", key=f"c_out_{t.task_id}")
+                                if st.button("Save Outcome", key=f"out_btn_{t.task_id}"):
+                                    if not conf_out:
+                                        st.error("Human confirmation required.")
+                                    else:
+                                        st.session_state.research_manager.record_outcome(
+                                            task_id=t.task_id,
+                                            outcome_status=ResearchStatus(out_choice),
+                                            notes=out_notes,
+                                            user_confirmed=True,
+                                        )
+                                        st.success("Outcome recorded!")
+                                        st.rerun()
+
+                        st.markdown("---")
+
+    # -------------------------------------------------------------
+    # TAB 7: Export Verified Reports
     # -------------------------------------------------------------
     with tab_export:
-        st.subheader("💾 Export Verified Assessment Reports")
-        st.caption("Generate publication-ready Markdown, JSON, and CSV reports containing reproduction steps and sanitized evidence.")
+        st.subheader("💾 Export Verified Assessment & Bug Bounty Reports")
+        st.caption("Generate publication-ready Markdown, JSON, and CSV reports. Includes policy-aware bug bounty draft generator.")
 
+        # Standard assessment reports
+        st.markdown("### 1. General Assessment Reports")
         findings_to_export = st.session_state.findings
-        total = len(findings_to_export)
-        reviewed_total = sum(1 for f in findings_to_export if f.human_reviewed)
-
-        if total > 0 and reviewed_total < total:
-            st.warning(
-                f"⚠️ **Notice:** {total - reviewed_total} of {total} findings are still pending human auditor review. "
-                "Ensure findings are independently verified before external dissemination."
-            )
-
         col_md, col_json, col_csv = st.columns(3)
 
         md_content = MarkdownReporter.generate(findings_to_export, st.session_state.target_url)
@@ -695,7 +666,6 @@ def main():
                 mime="text/markdown",
                 use_container_width=True,
             )
-            st.caption("Full report with executive summary, tier breakdown, AI triage, and auditor sign-off.")
 
         json_content = JSONReporter.generate(findings_to_export, st.session_state.target_url)
         with col_json:
@@ -706,7 +676,6 @@ def main():
                 mime="application/json",
                 use_container_width=True,
             )
-            st.caption("Structured JSON with verification tiers, AI triage analysis, and review metadata.")
 
         csv_content = CSVReporter.generate(findings_to_export)
         with col_csv:
@@ -717,10 +686,60 @@ def main():
                 mime="text/csv",
                 use_container_width=True,
             )
-            st.caption("Spreadsheet-ready CSV table including finding tiers, AI priorities, and review status.")
 
-        with st.expander("👁️ Preview Generated Markdown Report"):
-            st.markdown(md_content)
+        st.markdown("---")
+        # Policy-aware report generator
+        st.markdown("### 2. Program-Tailored Bug Bounty Report Draft")
+        st.caption("Structures findings into official disclosure format with preconditions, expected vs observed, impact, and sanitized evidence.")
+
+        tasks = st.session_state.research_manager.list_tasks()
+        if not tasks:
+            st.info("No research tasks recorded. Convert findings to research tasks in Tab 6 first.")
+        else:
+            task_options = {f"{t.task_id}: {t.title} ({t.status.value})": t for t in tasks}
+            sel_t_label = st.selectbox("Select Research Task for Report Generation:", list(task_options.keys()))
+            sel_task = task_options[sel_t_label]
+            sel_finding = st.session_state.research_manager.get_finding_for_task(sel_task.task_id)
+            sel_policy = st.session_state.policy_manager.get_policy(sel_task.program_id)
+
+            if not sel_finding or not sel_policy:
+                st.error("Missing finding or policy data for selected task.")
+            else:
+                rep_gen = PolicyReportGenerator()
+                col_exp_chk, col_exp_btn = st.columns([3, 1])
+
+                with col_exp_chk:
+                    review_confirmed = st.checkbox(
+                        "✍️ I explicitly certify that I have reviewed this report, verified reproducible evidence, and approved it for export.",
+                        value=False,
+                    )
+                    st.caption("Active session cookies, Authorization headers, tokens, private keys, passwords, and PII are automatically redacted.")
+
+                # Generate reports
+                tailored_md = rep_gen.generate_markdown(sel_task, sel_finding, sel_policy, researcher_review_confirmed=review_confirmed)
+                tailored_json = rep_gen.generate_json(sel_task, sel_finding, sel_policy, researcher_review_confirmed=review_confirmed)
+
+                with col_exp_btn:
+                    if review_confirmed:
+                        st.download_button(
+                            "📥 Download Policy Report (MD)",
+                            data=tailored_md,
+                            file_name=f"{sel_task.task_id}_disclosure_report.md",
+                            mime="text/markdown",
+                            use_container_width=True,
+                        )
+                        st.download_button(
+                            "📥 Download Policy Report (JSON)",
+                            data=tailored_json,
+                            file_name=f"{sel_task.task_id}_disclosure_report.json",
+                            mime="application/json",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.warning("Confirm researcher review above to enable export.")
+
+                with st.expander("👁️ Preview Policy-Tailored Report Draft", expanded=True):
+                    st.markdown(tailored_md)
 
 
 if __name__ == "__main__":

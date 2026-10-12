@@ -9,7 +9,7 @@ from appsec_assistant.analyzers.base import BaseAnalyzer
 from appsec_assistant.analyzers.headers_analyzer import HeadersAnalyzer
 from appsec_assistant.analyzers.cookies_analyzer import CookiesAnalyzer
 from appsec_assistant.analyzers.access_control_analyzer import AccessControlAnalyzer
-from appsec_assistant.models import HTTPTransaction, VulnerabilityFinding, TargetConfig
+from appsec_assistant.models import HTTPTransaction, VulnerabilityFinding, TargetConfig, WorkflowMode
 
 
 from appsec_assistant.policy import ProgramPolicyManager
@@ -37,10 +37,12 @@ class AuditEngine:
         config: TargetConfig,
         analyzers: Optional[List[BaseAnalyzer]] = None,
         policy_manager: Optional[ProgramPolicyManager] = None,
+        mode: WorkflowMode = WorkflowMode.LOCAL_LAB,
     ):
         self.config = config
         self.policy_manager = policy_manager
-        self.client = SafeHTTPClient(config, policy_manager=policy_manager)
+        self.mode = mode
+        self.client = SafeHTTPClient(config, policy_manager=policy_manager, mode=mode)
         self.analyzers: List[BaseAnalyzer] = analyzers or [
             HeadersAnalyzer(),
             CookiesAnalyzer(),

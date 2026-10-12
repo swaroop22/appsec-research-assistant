@@ -11,10 +11,20 @@ from urllib.parse import urljoin
 import requests
 
 from appsec_assistant.config import ScopeGuard, ScopeViolationError
-from appsec_assistant.models import HTTPTransaction, TargetConfig
+from appsec_assistant.models import HTTPTransaction, TargetConfig, WorkflowMode
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from appsec_assistant.policy import ProgramPolicyManager
+
+
+class NetworkDisabledInOfflineModeError(Exception):
+    """Raised when an HTTP network request is attempted while in OFFLINE mode."""
+    pass
+
+
+class ActiveTestingDisabledInPrepModeError(Exception):
+    """Raised when automated network requests are attempted in AUTHORIZED_PROGRAM_PREPARATION mode."""
+    pass
 
 
 class SafeHTTPClient:
@@ -31,9 +41,11 @@ class SafeHTTPClient:
         config: TargetConfig,
         policy_manager: Optional["ProgramPolicyManager"] = None,
         proxy_url: Optional[str] = None,
+        mode: WorkflowMode = WorkflowMode.LOCAL_LAB,
     ):
         self.config = config
         self.policy_manager = policy_manager
+        self.mode = mode
         self.scope_guard = ScopeGuard(
             allowed_hosts=config.allowed_hosts,
         )
@@ -78,6 +90,18 @@ class SafeHTTPClient:
         Validates every redirect hop to prevent requests escaping local loopback.
         Returns a captured HTTPTransaction.
         """
+        # Mode Enforcement
+        if self.mode == WorkflowMode.OFFLINE:
+            raise NetworkDisabledInOfflineModeError(
+                "Network requests are strictly disabled in OFFLINE mode (Mode A). "
+                "Analyze saved HTTP responses and existing evidence without transmitting network packets."
+            )
+        if self.mode == WorkflowMode.AUTHORIZED_PROGRAM_PREPARATION:
+            raise ActiveTestingDisabledInPrepModeError(
+                "Automated network testing is disabled in Mode C (Authorized Program Preparation). "
+                "Mode C is strictly for scope review, research notes, finding mapping, and report drafting."
+            )
+
         # Resolve full URL if relative endpoint provided
         if endpoint_or_url.startswith("http://") or endpoint_or_url.startswith("https://"):
             current_url = endpoint_or_url

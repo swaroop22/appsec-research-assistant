@@ -1,0 +1,56 @@
+{
+  "program_id": "acme-fintech-bounty",
+  "program_name": "Acme FinTech Public Bug Bounty Program",
+  "company_name": "Acme Financial Services Inc.",
+  "policy_url": "https://bounty.acmefintech-security.example.com/policy",
+  "organization": "Acme Financial Services Inc.",
+  "eligible_assets": [
+    "https://app.acmefintech.example.com/*",
+    "https://api.acmefintech.example.com/v1/*",
+    "https://auth.acmefintech.example.com/*"
+  ],
+  "authorized_assets": [
+    "https://app.acmefintech.example.com/*",
+    "https://api.acmefintech.example.com/v1/*",
+    "https://auth.acmefintech.example.com/*"
+  ],
+  "excluded_assets": [
+    "https://internal.acmefintech.example.com/*",
+    "https://admin.acmefintech.example.com/internal-billing/*",
+    "https://*.corp.acmefintech.example.com/*"
+  ],
+  "permitted_vulnerability_categories": [
+    "OWASP Top 10 (Access Control, Injection, SSRF, Misconfiguration)",
+    "Authentication and Session Management Flaws",
+    "Business Logic Flaws in Payment Checkout",
+    "Missing Security Headers and Weak Cookie Attributes"
+  ],
+  "prohibited_methods": [
+    "Denial of Service (DoS/DDoS) and resource exhaustion attacks",
+    "Social engineering, phishing, or vishing of employees/customers",
+    "Physical attacks against Acme facilities or data centers",
+    "Automated scanning tools with request rates exceeding 2 requests per second",
+    "Accessing or modifying non-researcher customer data"
+  ],
+  "rate_limit_rps": 2.0,
+  "testing_restrictions": [
+    "Testing must be conducted using accounts created with the +bounty research tag.",
+    "Zero destructive testing; do not execute DELETE or account wipe actions.",
+    "All testing traffic must originate with User-Agent header containing 'AcmeResearcher-'."
+  ],
+  "reporting_instructions": "Submit reports via https://bounty.acmefintech-security.example.com/submit or email security-reports@acmefintech.example.com with PGP encryption.",
+  "required_evidence": [
+    "Target URL and affected endpoint",
+    "Minimal HTTP request and response evidence",
+    "Step-by-step reproduction instructions",
+    "Realistic business impact assessment"
+  ],
+  "disclosure_requirements": "Coordinated disclosure: 90 days after acknowledgment before public release. Do not disclose details publicly prior to Acme approval.",
+  "safe_harbor_terms": "Acme will not initiate legal action against researchers acting in good faith compliance with this policy.",
+  "research_status": "ACTIVE_RESEARCH",
+  "policy_version": "2.4",
+  "policy_retrieval_date": "2026-10-01 00:00:00 UTC",
+  "max_policy_age_days": 90,
+  "is_verified": false,
+  "is_enabled": false
+}

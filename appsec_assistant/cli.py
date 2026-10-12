@@ -313,13 +313,17 @@ def run_interactive_menu() -> None:
             break
 
 
-from appsec_assistant.policy import ProgramPolicyManager, PolicyVerificationError
+from appsec_assistant.models import WorkflowMode, ResearchStatus, ResearchTask
+from appsec_assistant.policy import ProgramPolicyManager, PolicyVerificationError, create_sample_fictional_policy
+from appsec_assistant.research import ResearchManager
+from appsec_assistant.reporters.policy_report_generator import PolicyReportGenerator
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="AppSec Research Assistant: Web Security Analysis for Defensive Study"
     )
+    parser.add_argument("--mode", default="LOCAL_LAB", choices=["OFFLINE", "LOCAL_LAB", "AUTHORIZED_PROGRAM_PREPARATION"], help="Workflow execution mode (default: LOCAL_LAB)")
     parser.add_argument("--target", help="Target URL (must be local, e.g. http://localhost:3000)")
     parser.add_argument("--export-md", help="Export findings to Markdown file")
     parser.add_argument("--export-json", help="Export findings to JSON file")
@@ -329,6 +333,8 @@ def main() -> None:
     parser.add_argument("--verify-policy", help="Manually verify and enable a program policy by ID")
     parser.add_argument("--reviewer", default="Security Researcher", help="Reviewer name for policy verification or finding sign-off")
     parser.add_argument("--notes", default="Manual scope verification completed.", help="Verification notes")
+    parser.add_argument("--import-policy", help="Path to a program policy JSON file to import into registry")
+    parser.add_argument("--sample-policy", action="store_true", help="Load sample fictional Acme FinTech bug bounty policy")
     parser.add_argument("--exercises", action="store_true", help="List available guided security exercises")
     parser.add_argument("--run-exercise", help="Execute a specific guided exercise by ID (e.g. EX-AC-01, EX-IDOR-01)")
     parser.add_argument("--review-all", action="store_true", help="Mark all generated findings as human-reviewed before export")
@@ -342,20 +348,48 @@ def main() -> None:
     print_banner()
 
     policy_mgr = ProgramPolicyManager()
+    research_mgr = ResearchManager(policy_mgr)
+
+    if args.sample_policy:
+        sample = create_sample_fictional_policy()
+        policy_mgr.add_policy(sample)
+        console.print(f"[bold green]✔ Successfully loaded sample fictional policy '{sample.program_name}' ({sample.program_id}).[/bold green]")
+        sys.exit(0)
+
+    if args.import_policy:
+        try:
+            imported = policy_mgr.import_policy_from_file(args.import_policy)
+            console.print(f"[bold green]✔ Successfully imported policy '{imported.program_name}' from {args.import_policy}.[/bold green]")
+        except Exception as e:
+            console.print(f"[bold red]✖ Import failed: {e}[/bold red]")
+            sys.exit(1)
+        sys.exit(0)
 
     # If --policies flag specified
     if args.policies:
-        console.print("[bold cyan]Configured Vulnerability Disclosure Program Policies:[/bold cyan]")
+        console.print("[bold cyan]Configured Bug Bounty & VDP Program Policies:[/bold cyan]")
         p_table = Table(border_style="cyan")
         p_table.add_column("Program ID", style="bold")
-        p_table.add_column("Organization")
+        p_table.add_column("Company / Org")
         p_table.add_column("Verified", width=10)
+        p_table.add_column("Stale", width=10)
         p_table.add_column("Enabled", width=10)
-        p_table.add_column("Authorized Scope Assets")
+        p_table.add_column("Eligible Scope Assets")
+        p_table.add_column("Excluded Assets")
         for p in policy_mgr.list_policies():
             v_str = "[green]YES[/green]" if p.is_verified else "[red]NO[/red]"
+            s_str = "[red]STALE[/red]" if p.is_stale() else "[green]FRESH[/green]"
             e_str = "[green]ENABLED[/green]" if p.is_enabled else "[yellow]DISABLED[/yellow]"
-            p_table.add_row(p.program_id, p.organization, v_str, e_str, ", ".join(p.authorized_assets))
+            excl_str = ", ".join(p.excluded_assets[:2]) if p.excluded_assets else "[dim]None[/dim]"
+            p_table.add_row(
+                p.program_id,
+                p.company_name or p.organization,
+                v_str,
+                s_str,
+                e_str,
+                ", ".join(p.eligible_assets[:2]),
+                excl_str,
+            )
         console.print(p_table)
         sys.exit(0)
 
@@ -427,7 +461,7 @@ def main() -> None:
             console.print("[green]✔ Started built-in training lab on http://127.0.0.1:5000[/green]")
 
         config = TargetConfig(base_url=target_url)
-        engine = AuditEngine(config, policy_manager=policy_mgr)
+        engine = AuditEngine(config, policy_manager=policy_mgr, mode=WorkflowMode(args.mode))
         console.print(f"[cyan]Auditing target: {target_url}...[/cyan]")
 
         endpoints = ["/", "/api/Users/1", "/rest/basket/1", "/admin", "/hardened"]
