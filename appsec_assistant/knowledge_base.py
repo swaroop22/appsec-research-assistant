@@ -267,6 +267,18 @@ class GuidedExercise:
     synthetic_data: Dict[str, Any]
     remediation_summary: str
 
+    @property
+    def description(self) -> str:
+        return self.objective or self.learning_context
+
+    @property
+    def endpoint(self) -> str:
+        return self.target_endpoint
+
+    @property
+    def http_method(self) -> str:
+        return "GET"
+
 
 EXERCISES_CATALOG: Dict[str, GuidedExercise] = {
     "EX-AC-01": GuidedExercise(

@@ -451,7 +451,7 @@ def main():
                 st.success("Loaded Acme FinTech sample policy into registry!")
                 st.rerun()
         with col_top2:
-            with st.popover("📤 Import Policy Document (JSON)"):
+            with st.expander("📤 Import Policy Document (JSON)"):
                 uploaded_file = st.file_uploader("Upload Policy JSON:", type=["json"])
                 if uploaded_file is not None:
                     try:
@@ -491,7 +491,7 @@ def main():
 
                 col_b1, col_b2, col_b3 = st.columns(3)
                 with col_b1:
-                    with st.popover("✍️ Verify Program Scope"):
+                    with st.expander("✍️ Verify Program Scope"):
                         st.write(f"Record human verification for `{p.program_id}`:")
                         v_name = st.text_input("Reviewer Name:", value="Security Engineer", key=f"pv_name_{p.program_id}")
                         v_notes = st.text_area("Verification Notes:", value="Verified policy URL is authentic, scope matches declared boundaries.", key=f"pv_notes_{p.program_id}")
@@ -603,7 +603,7 @@ def main():
                                     st.error(str(err))
 
                         with col_act2:
-                            with st.popover("📤 Record Official Submission"):
+                            with st.expander("📤 Record Official Submission"):
                                 st.write("Record manual submission to program team:")
                                 sub_dest = st.text_input("Reporting Destination:", value=t.submission_destination, key=f"sdest_{t.task_id}")
                                 sub_ref = st.text_input("Report Reference / Ticket #:", value="H1-REPORT-12345", key=f"sref_{t.task_id}")
@@ -625,7 +625,7 @@ def main():
                                             st.error(str(e_sub))
 
                         with col_act3:
-                            with st.popover("🏁 Record Program Outcome"):
+                            with st.expander("🏁 Record Program Outcome"):
                                 st.write("Record program response / triage outcome:")
                                 out_choice = st.selectbox("Outcome:", [ResearchStatus.ACCEPTED.value, ResearchStatus.REJECTED.value, ResearchStatus.DUPLICATE.value, ResearchStatus.RESOLVED.value], key=f"out_sel_{t.task_id}")
                                 out_notes = st.text_input("Outcome Notes:", value="Accepted by security team.", key=f"onotes_{t.task_id}")
