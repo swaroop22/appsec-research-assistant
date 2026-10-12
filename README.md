@@ -10,46 +10,54 @@ A modular, defensive web application security analysis assistant written in Pyth
   - **Tiered Finding Verification**: Four distinct verification tiers (`OBSERVATION`, `HEURISTIC_INDICATOR`, `SUSPECTED_VULNERABILITY`, `INDEPENDENTLY_VERIFIED`), reproducible evidence requirements, and status code 200 rule (never inferring critical severity from status code alone).
   - **Human Review & Reporting Workflow**: Comprehensive finding review interface, severity rationales, reproduction steps, automated evidence sanitization (redacting tokens, sessions, passwords), and multi-format exports (Markdown, JSON, CSV) requiring human sign-off before external disclosure.
   - **Hardened Security & Boundary Safeguards**: Proxy leak prevention (`trust_env=False`), local proxy validation, malformed userinfo rejection (`@`), hop-by-hop redirect validation, and fail-closed boundary enforcement with qualified security claims.
+- **Phase 4**: AI-Assisted Vulnerability Triage Layer, including:
+  - **Modular AI Provider Abstraction**: Pluggable providers (`mock`, `openai`, `anthropic`, `gemini`, `local`) with secure credential loading from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) or in-app configuration.
+  - **Mandatory User Consent & Privacy**: External providers are blocked from receiving finding data unless explicit user consent is given (`consent_given=True`). Fails closed or safely defaults to the offline deterministic mock provider.
+  - **Evidence-Grounded Finding Analysis**: Explains findings in plain English, extracts observed evidence, analyzes why evidence matters, estimates realistic impact, considers alternative explanations (e.g. dev proxy, CDN offloading), flags missing info, and provides verification steps.
+  - **Distinct Metrics (Confidence vs. Severity vs. Priority)**:
+    - **Confidence**: Strength and certainty of observed evidence.
+    - **Severity**: Potential technical and business impact if vulnerability is real.
+    - **Priority**: Recommended order in which a researcher should investigate findings.
+  - **Strict Safety Guardrails & Tier Clamp**: The AI model is strictly prohibited from promoting heuristics or observations to `INDEPENDENTLY_VERIFIED` without reproducible execution proof.
+  - **Fabrication Defense**: Validates evidence references against the original finding and strips hallucinated URLs or credentials.
+  - **Prompt-Injection Defense**: Untrusted finding content, HTML, and HTTP bodies are isolated within explicit `<untrusted_data_boundary>` delimiters with directive neutralization.
+  - **Semantic Duplicate Detection**: Identifies findings sharing underlying root causes (e.g. multi-endpoint cookies or sequential IDs), presenting similarity rationales with human approval required before merging.
+  - **Preserved Finding Context**: Merging approved duplicates preserves all affected URLs, full evidence, timestamps, and analyzer identifiers.
 
 ---
 
-## 📋 Phase 3 Core Capabilities
+## 🤖 Phase 4 AI-Assisted Triage Architecture
 
-### A. Program Policy Manager (`appsec_assistant/policy.py`)
-- **Authorized Scope Recording**: Records vulnerability disclosure program (VDP) policies, official program URLs, explicitly authorized target assets, prohibited testing methods, rate limits (requests/sec), reporting instructions, and safe harbor terms.
-- **Mandatory Manual Verification**: Program policies are created in an unverified state (`is_verified=False`, `is_enabled=False`). A security researcher must manually review scope and execute `verify_policy(policy_id, reviewer, notes)` before any testing against that program can be enabled.
-- **Fail-Closed Authorization**: Targets are never assumed authorized simply because they are public or have a policy entry. Target URLs must pass both `ScopeGuard` loopback boundary checks and `ProgramPolicyManager` scope matching.
-
-### B. Guided Local Security Testing Workflow (`appsec_assistant/knowledge_base.py` & `lab_server.py`)
-Integrated hands-on educational exercises restricted strictly to the local mock lab (`http://127.0.0.1:5000`):
-1. **`EX-AC-01` (Broken Access Control)**: Unauthenticated access to administrative controls on `/admin`. Demonstrates verified vulnerability proof requirements.
-2. **`EX-IDOR-01` (IDOR)**: Direct object reference on `/api/Users/1`. Demonstrates heuristic indicator classification and cross-account evidence requirements.
-3. **`EX-AUTH-01` (Authentication)**: Session fixation and weak cookie issuance on `/auth/login`. Uses synthetic test accounts (`Bob`, `Alice`, `Charlie`).
-4. **`EX-HDR-01` (Security Headers)**: Missing baseline defensive headers (CSP, HSTS, X-Content-Type-Options) on root `/`.
-5. **`EX-CK-01` (Insecure Cookies)**: Missing HttpOnly, Secure, and SameSite attributes on session cookies.
-6. **`EX-INP-01` (Input Validation)**: Parameter reflection on `/search?q=query` demonstrating passive observation without automated payload execution.
-
-### C. Finding Verification & Four-Tier Evidence Model
-Findings are organized into four explicit, verifiable tiers:
-- **`OBSERVATION`**: Contextual technical observations (server banners, reflected parameters, exposed endpoint paths).
-- **`HEURISTIC_INDICATOR`**: Architectural patterns or naming conventions (e.g. sequential IDs `/Users/1`) that suggest potential risk but lack cross-account verification proof.
-- **`SUSPECTED_VULNERABILITY`**: Absence of defensive controls (missing CSP, unflagged cookies) or probable flaws awaiting multi-step reproduction.
-- **`INDEPENDENTLY_VERIFIED`**: Vulnerabilities substantiated with reproducible, end-to-end evidence (e.g. unauthenticated administrative data exposure).
-
-> ⚠️ **Status Code 200 Rule**: The analyzer **never** infers a Critical severity from an HTTP 200 status code alone. Status code 200 responses to sensitive endpoints are checked for login challenges (`OBSERVATION`), then verified privileged content/controls (`INDEPENDENTLY_VERIFIED`, `CRITICAL`), and fall back to low-severity heuristics (`HEURISTIC_INDICATOR`, `LOW`) if the response is neutral.
-
-### D. Human Review & Sanitized Reporting Workflow
-- **Review Screen & Sign-Off**: Streamlit tab and CLI flags allow human analysts to review findings, inspect confidence and severity rationales, examine reproduction steps, and sign off (`reviewed_by`, timestamp, notes).
-- **Automated Evidence Sanitization**: Sensitive authentication tokens, Bearer JWTs, session IDs, and credentials in headers and response bodies are automatically redacted (`[REDACTED_TOKEN]`, `[REDACTED_SESSION]`, `[REDACTED_SECRET]`) before reporting.
-- **Multi-Format Exports**: Exports complete audit reports in **Markdown**, **JSON**, and **CSV** formats, including human review attestation banners and mandatory external submission warnings.
-
-### E. Security Boundary & Quality Hardening
-- **Loopback Enforcement**: Active scanning is restricted strictly to loopback interfaces (`localhost`, `127.0.0.1`, `::1`, and RFC 6761 `*.localhost`).
-- **Alternate IP Representation Defense**: Automatically decodes and evaluates alternate IP encodings (octal `0177.0.0.1`, hexadecimal `0x7f000001`, dword integers `2130706433`, abbreviated IPv4 `127.1`, and IPv4-mapped IPv6 `[::ffff:127.0.0.1]`).
-- **Strict Redirect & Hop Validation**: `SafeHTTPClient` disables automatic redirects and validates every redirect hop (`Location` header). Redirects to external or non-loopback addresses are aborted immediately.
-- **Proxy Boundary Hardening**: `SafeHTTPClient` sets `trust_env = False` to prevent ambient environment proxy leakage (`HTTP_PROXY`, `HTTPS_PROXY`), validates configured proxies to ensure they resolve to loopback, and rejects external proxies.
-- **Malformed URL Resistance**: Rejects userinfo credential bypasses (`http://localhost@attacker.com`), backslash path traversal tricks (`http://localhost\attacker.com`), out-of-range ports, control characters, and unsupported schemes.
-- **Defensible Claims**: Recognizes that application-layer boundaries operate within Python runtime constraints; claims are qualified and tested rather than asserted as absolute.
+```
+                                  ┌─────────────────────────────┐
+                                  │   Deterministic Findings    │
+                                  │  (Headers, Cookies, Access) │
+                                  └──────────────┬──────────────┘
+                                                 │
+                                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   AIService Orchestrator                                │
+│                                                                                         │
+│  [Consent Guard] ──► Requires explicit consent before calling external LLMs            │
+│  [Provider Router] ──► Mock (Offline) | OpenAI | Anthropic | Gemini | Local (Loopback)  │
+│  [Untrusted Boundary] ──► Neutralizes prompt injection in headers/HTML payloads         │
+│  [Schema Validator] ──► Enforces JSON Schema, strips hallucinated URLs & fake evidence  │
+│  [Tier Guardrail] ──► Clamps heuristic-to-verified promotion attempts                   │
+└────────────────────────────────────────┬────────────────────────────────────────────────┘
+                                         │
+                 ┌───────────────────────┴───────────────────────┐
+                 ▼                                               ▼
+┌──────────────────────────────────┐            ┌──────────────────────────────────┐
+│     Evidence-Grounded Triage     │            │    Semantic Duplicate Review     │
+│ - Plain-English explanation      │            │ - Identifies shared root causes  │
+│ - Why evidence matters           │            │ - Similarity scores & rationales │
+│ - Realistic potential impact     │            │ - Human approval required        │
+│ - Alternative explanations       │            │ - Preserves all affected URLs    │
+│ - Missing verification info      │            │ - Preserves all evidence         │
+│ - Recommended review priority    │            └──────────────────────────────────┘
+│ - Potential false positive flag  │
+└──────────────────────────────────┘
+```
 
 ---
 
@@ -57,15 +65,15 @@ Findings are organized into four explicit, verifiable tiers:
 
 ```
 appsec-research-assistant/
-├── app.py                             # 🌐 Streamlit Web Application (5 Phase 3 Tabs)
+├── app.py                             # 🌐 Streamlit Web Application (6 Phase 4 Tabs)
 ├── requirements.txt                   # Complete dependencies
 ├── README.md                          # Full documentation guide
-├── sample_audit_report.md             # Example generated markdown audit report
+├── sample_audit_report.md             # Example generated markdown audit report with AI triage
 ├── .streamlit/
 │   └── config.toml                    # Streamlit server and telemetry configurations
 ├── appsec_assistant/                  # Core package
 │   ├── __init__.py
-│   ├── models.py                      # FindingTier, ProgramPolicy, VulnerabilityFinding, Evidence Sanitizer
+│   ├── models.py                      # FindingTier, ProgramPolicy, VulnerabilityFinding, ai_triage field
 │   ├── policy.py                      # ProgramPolicyManager (VDP scope verification & enforcement)
 │   ├── config.py                      # Hardened ScopeGuard (Alternate IPs, DNS, Malformed URLs)
 │   ├── client.py                      # SafeHTTPClient with proxy & redirect hop validation
@@ -74,7 +82,13 @@ appsec-research-assistant/
 │   ├── samples.py                     # Realistic sample HTTP responses for testing
 │   ├── knowledge_base.py              # Educational vulnerability encyclopedia & 6 Guided Exercises
 │   ├── lab_server.py                  # Local mock practice lab server with synthetic accounts
-│   ├── cli.py                         # Rich interactive terminal interface with Phase 3 flags
+│   ├── cli.py                         # Rich interactive terminal interface with AI triage flags
+│   ├── ai/                            # 🤖 AI-Assisted Triage Layer (Phase 4)
+│   │   ├── __init__.py
+│   │   ├── models.py                  # PriorityLevel, AITriageResult, DuplicateSuggestion, AIProviderConfig
+│   │   ├── validator.py               # JSON schema validation, grounding, tier clamping, injection defense
+│   │   ├── providers.py               # Modular providers: Mock, OpenAI, Anthropic, Gemini, Local
+│   │   └── service.py                 # AIService orchestrator, consent enforcement, duplicate merge
 │   ├── analyzers/                     # Modular security analyzers
 │   │   ├── __init__.py
 │   │   ├── base.py                    # BaseAnalyzer interface
@@ -83,11 +97,15 @@ appsec-research-assistant/
 │   │   └── access_control_analyzer.py # Access control & IDOR with heuristic vs verified logic
 │   └── reporters/                     # Structured reporting
 │       ├── __init__.py
-│       ├── csv_reporter.py            # CSV reporter with finding tier & review metadata
-│       ├── json_reporter.py           # JSON reporter with finding tier & review metadata
-│       └── markdown_reporter.py       # Formatted markdown reporter with tier summary & sign-off
-└── tests/                             # Automated test suite (58 tests, 100% passing)
+│       ├── csv_reporter.py            # CSV reporter with AI priority and false positive columns
+│       ├── json_reporter.py           # JSON reporter with complete AI triage serialization
+│       └── markdown_reporter.py       # Formatted markdown reporter with AI triage analysis blocks
+└── tests/                             # Automated test suite (76 tests, 100% passing)
     ├── __init__.py
+    ├── test_ai_provider_abstraction.py # Tests providers, credential handling, timeouts, consent
+    ├── test_ai_triage_validation.py   # Tests JSON schema, tier clamp, evidence grounding, injection
+    ├── test_ai_duplicate_detection.py # Tests semantic similarity, human approval, evidence preservation
+    ├── test_ai_service_integration.py # Tests end-to-end audit with AI triage and report formats
     ├── test_program_policy.py         # Tests VDP policy manager, scope verification, fail-closed
     ├── test_guided_exercises.py       # Tests 6 guided exercises & synthetic lab endpoints
     ├── test_finding_verification_tiers.py # Tests 4-tier model, evidence sanitization, status code 200 rule
@@ -110,39 +128,40 @@ appsec-research-assistant/
 
 ## 🚀 Quickstart & Verification
 
-### 1. Run Automated Unit & Regression Tests (58 Tests)
+### 1. Run Automated Unit & Regression Tests (76 Tests)
 ```bash
 pytest tests/
 ```
 Output:
 ```text
-============================== 58 passed in 2.58s ==============================
+============================== 76 passed in 2.76s ==============================
 ```
 
 ### 2. Launch Streamlit Web Application
 ```bash
 streamlit run app.py
 ```
-Open **`http://localhost:8501`** in your browser to access the 5 workflow tabs:
-1. **🔍 Security Analysis & Audit**: Passive response inspection and live local target auditing.
-2. **🎓 Guided Lab Exercises**: Run guided exercises with synthetic accounts Bob, Alice, and Charlie.
-3. **📋 Finding Review & Human Sign-Off**: Review findings, inspect reproduction steps and sanitized evidence, and sign off with human auditor notes.
-4. **📜 Program Policy Manager**: Inspect and manually verify vulnerability disclosure program policies.
-5. **📤 Export Verified Reports**: Generate and download human-reviewed audit reports in Markdown, JSON, and CSV formats.
+Open **`http://localhost:8501`** in your browser to access the 6 workflow tabs:
+1. **🔬 Security Analysis & Audit**: Passive response inspection, local auditing, and instant AI triage.
+2. **🎓 Guided Lab Exercises**: 6 guided exercises using synthetic test accounts Bob, Alice, and Charlie.
+3. **🤖 AI Triage & Analysis**: Evidence-grounded explanations, false positive detection, review prioritization, and semantic duplicate reviews.
+4. **📋 Finding Review & Human Sign-Off**: Review findings, inspect reproduction steps and sanitized evidence, and sign off as a human auditor.
+5. **📜 Program Policy Manager**: Inspect and manually verify vulnerability disclosure program policies.
+6. **💾 Export Verified Reports**: Download verified Markdown, JSON, and CSV reports.
 
 ### 3. CLI Workflow Commands
 ```bash
-# List configured VDP policies and scope verification status
-python -m appsec_assistant.cli --policies
+# Run local lab audit with AI triage and semantic duplicate analysis
+python -m appsec_assistant.cli --lab --ai-triage --ai-duplicates
 
-# List guided educational security exercises
-python -m appsec_assistant.cli --exercises
+# Run audit, mark human review, and export multi-format reports
+python -m appsec_assistant.cli --lab --ai-triage --review-all --export-md report.md --export-json report.json
 
-# Execute a specific guided exercise against the practice lab
+# Execute specific guided exercise (e.g. Broken Access Control)
 python -m appsec_assistant.cli --run-exercise EX-AC-01
 
-# Run practice lab audit, apply human review, and export multi-format reports
-python -m appsec_assistant.cli --lab --review-all --export-md report.md --export-json report.json
+# List configured VDP policies
+python -m appsec_assistant.cli --policies
 ```
 
 ---
@@ -150,6 +169,7 @@ python -m appsec_assistant.cli --lab --review-all --export-md report.md --export
 ## ⚠️ Known Limitations & Responsible Use
 
 1. **Defensive & Local Scope Only**: All active testing capabilities are intentionally hardwired to the local loopback boundary (`localhost` / `127.0.0.1`). Scanning remote internet targets is strictly disabled.
-2. **No Automated Exploit Execution**: The assistant identifies security vulnerabilities and provides reproducible steps and remediation advice; it does not contain offensive weaponization or automated exploit payloads.
-3. **Application-Layer Boundary Caveat**: While `ScopeGuard` and `SafeHTTPClient` defend against alternate IP encodings, DNS rebinding aliases, userinfo tricks, and ambient proxy leaks, application-level Python guards operate inside standard process limits. Defense-in-depth network firewalls and container isolation should be used in production environments.
+2. **AI Decision-Support Only**: The AI triage layer is designed strictly for assistance, summarization, and prioritization. It never makes autonomous network requests, executes exploits, modifies scopes, or confirms vulnerabilities without reproducible proof.
+3. **External Consent Required**: Data is never sent to third-party language models without explicit configuration and consent. The deterministic mock provider functions entirely offline.
+4. **Application-Layer Boundary Caveat**: While `ScopeGuard` and `SafeHTTPClient` defend against alternate IP encodings, DNS rebinding aliases, userinfo tricks, and ambient proxy leaks, application-level Python guards operate inside standard process limits. Defense-in-depth network firewalls and container isolation should be used in production environments.
 

@@ -1,14 +1,17 @@
 """
-AppSec Research Assistant - Phase 3 Controlled Vulnerability Research Workflow.
+AppSec Research Assistant - Phase 4 AI-Assisted Vulnerability Triage Workflow.
 
 A defensive web application security research and learning tool built with Streamlit.
 Includes:
 - Program Policy Manager with manual scope verification and fail-closed validation.
 - Local Guided Security Exercises with synthetic accounts.
-- Finding Verification Review Screen separating Observations, Heuristics, Suspected Flaws, and Verified Findings.
-- Human Auditor Sign-Off Workflow and Sanitized Reporting (Markdown, JSON, CSV).
+- AI-Assisted Finding Triage Layer (Modular providers: Mock, OpenAI, Anthropic, Gemini, Local).
+- Grounded Evidence Verification (distinguishing Observation, Heuristic, Suspected, and Verified).
+- Human Review & Sign-Off Workflow and Sanitized Reporting (Markdown, JSON, CSV).
+- Semantic Duplicate Detection with human approval before merging.
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import datetime
@@ -36,10 +39,19 @@ from appsec_assistant.reporters.json_reporter import JSONReporter
 from appsec_assistant.reporters.markdown_reporter import MarkdownReporter
 from appsec_assistant.samples import SAMPLE_PRESETS
 
+from appsec_assistant.ai import (
+    AIService,
+    AIProviderConfig,
+    AITriageResult,
+    PriorityLevel,
+    DuplicateSuggestion,
+    ConsentRequiredError,
+)
+
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="AppSec Research Assistant | Phase 3",
+    page_title="AppSec Research Assistant | Phase 4",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -91,6 +103,45 @@ st.markdown("""
         font-weight: 700;
         border: 1px solid #CBD5E1;
     }
+    .badge-prio-critical {
+        background-color: #FEE2E2;
+        color: #991B1B;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 700;
+        border: 1px solid #FCA5A5;
+    }
+    .badge-prio-high {
+        background-color: #FFEDD5;
+        color: #C2410C;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 700;
+        border: 1px solid #FDBA74;
+    }
+    .badge-prio-med {
+        background-color: #FEF3C7;
+        color: #B45309;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 700;
+        border: 1px solid #FDE68A;
+    }
+    .badge-prio-low {
+        background-color: #DCFCE7;
+        color: #15803D;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: 700;
+        border: 1px solid #86EFAC;
+    }
+    .ai-box {
+        background-color: #F0FDF4;
+        border-left: 4px solid #10B981;
+        padding: 12px 16px;
+        margin-bottom: 12px;
+        border-radius: 0 8px 8px 0;
+    }
     .review-box {
         background-color: #F8FAFC;
         border-left: 4px solid #3B82F6;
@@ -111,6 +162,12 @@ if "policy_manager" not in st.session_state:
     st.session_state.policy_manager = ProgramPolicyManager()
 if "target_url" not in st.session_state:
     st.session_state.target_url = "http://127.0.0.1:5000"
+if "ai_config" not in st.session_state:
+    st.session_state.ai_config = AIProviderConfig(provider_type="mock")
+if "ai_enabled" not in st.session_state:
+    st.session_state.ai_enabled = True
+if "ai_duplicates" not in st.session_state:
+    st.session_state.ai_duplicates = []
 
 
 def analyze_http_response(raw_text: str, target_url: str) -> tuple:
@@ -131,11 +188,11 @@ def analyze_http_response(raw_text: str, target_url: str) -> tuple:
 
 
 def main():
-    st.markdown('<div class="main-header">🛡️ AppSec Research Assistant — Phase 3</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🛡️ AppSec Research Assistant — Phase 4</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="sub-header">'
-        'Controlled Vulnerability Research Workflow: Program Policy Verification, Guided Practice Lab Exercises, '
-        'Tiered Finding Verification, and Human-Reviewed Reporting.'
+        'AI-Assisted Vulnerability Triage, False Positive Identification, Manual Review Prioritization, '
+        'Semantic Duplicate Reviews, and Grounded Scope Verification.'
         '</div>',
         unsafe_allow_html=True
     )
@@ -153,6 +210,12 @@ def main():
             st.warning("⚠️ No program policy currently enabled.")
 
         st.markdown("---")
+        st.markdown("### 🤖 AI Triage Status")
+        st.write(f"**Provider:** `{st.session_state.ai_config.provider_type.upper()}`")
+        st.write(f"**Status:** {'🟢 Enabled' if st.session_state.ai_enabled else '⏸️ Disabled'}")
+        st.write(f"**External Consent:** {'✅ Granted' if st.session_state.ai_config.consent_given else '🔒 Local Only'}")
+
+        st.markdown("---")
         st.markdown("### 🧭 Verification Tiers")
         st.markdown("""
         - 🛡️ **Independently Verified**: Confirmed with reproducible proof.
@@ -160,14 +223,12 @@ def main():
         - 🧭 **Heuristic Indicator**: Pattern clue (e.g. IDOR).
         - 🔍 **Observation**: Contextual technical fact.
         """)
-        st.markdown("---")
-        st.markdown("### ⚠️ Policy Safeguard")
-        st.caption("Public targets are NEVER assumed authorized. Testing is strictly restricted to verified local scopes.")
 
     # Main Tabs
-    tab_audit, tab_exercises, tab_review, tab_policy, tab_export = st.tabs([
+    tab_audit, tab_exercises, tab_triage, tab_review, tab_policy, tab_export = st.tabs([
         "🔬 Security Analysis & Audit",
         "🎓 Guided Lab Exercises",
+        "🤖 AI Triage & Analysis",
         "📋 Finding Review & Human Sign-Off",
         "📜 Program Policy Manager",
         "💾 Export Verified Reports",
@@ -210,12 +271,24 @@ def main():
             placeholder="HTTP/1.1 200 OK\nContent-Type: text/html\nSet-Cookie: session_id=abc; Path=/\n...",
         )
 
-        if st.button("🔍 Run Passive Analysis", type="primary"):
+        col_run1, col_run2 = st.columns([1, 1])
+        with col_run1:
+            run_btn = st.button("🔍 Run Passive Analysis", type="primary", use_container_width=True)
+        with col_run2:
+            auto_triage = st.checkbox("Automatically run AI triage on discovered findings", value=True)
+
+        if run_btn:
             if http_input.strip():
                 transaction, findings = analyze_http_response(http_input, st.session_state.target_url)
                 st.session_state.current_transaction = transaction
                 st.session_state.findings = findings
-                st.success(f"Analysis complete! Discovered {len(findings)} findings. Proceed to the 'Finding Review' tab.")
+
+                if auto_triage and st.session_state.ai_enabled:
+                    ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
+                    ai_service.triage_all(findings, source_transaction=transaction)
+                    st.success(f"Analysis complete! Discovered {len(findings)} findings and enriched with AI triage. Proceed to the 'AI Triage' tab.")
+                else:
+                    st.success(f"Analysis complete! Discovered {len(findings)} findings.")
             else:
                 st.warning("Please paste an HTTP response or select a sample preset.")
 
@@ -223,10 +296,12 @@ def main():
             st.markdown("#### Discovered Findings Overview")
             rows = []
             for f in st.session_state.findings:
+                ai_d = getattr(f, "ai_triage", None) or {}
                 rows.append({
                     "ID": f.finding_id,
                     "Tier": f.finding_tier.label,
                     "Severity": f.severity.value,
+                    "AI Priority": ai_d.get("recommended_priority", "-"),
                     "Confidence": f.confidence.value,
                     "Title": f.title,
                     "Human Reviewed": "✅ Yes" if f.human_reviewed else "⏳ Pending",
@@ -271,13 +346,17 @@ def main():
             st.markdown("### 🚀 Execute Exercise")
             st.write("Run this exercise safely against the local practice lab on loopback.")
             if st.button(f"Run {selected_ex.exercise_id} Against Lab", type="primary", use_container_width=True):
-                # Start temporary local lab instance to execute exercise
                 lab = LocalLabServer(port=5000)
                 try:
                     lab.start()
                     config = TargetConfig(base_url="http://127.0.0.1:5000")
                     engine = AuditEngine(config, policy_manager=st.session_state.policy_manager)
                     discovered = engine.audit_exercise(selected_ex)
+                    
+                    if st.session_state.ai_enabled:
+                        ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
+                        ai_service.triage_all(discovered)
+
                     st.session_state.findings = discovered
                     st.session_state.target_url = f"http://127.0.0.1:5000{selected_ex.target_endpoint}"
                     st.success(f"Exercise executed! Captured {len(discovered)} findings for `{selected_ex.target_endpoint}`.")
@@ -286,10 +365,176 @@ def main():
 
                 st.markdown("#### Discovered Findings for Exercise")
                 for f in st.session_state.findings:
-                    st.markdown(f"- **[{f.finding_tier.label}]** `{f.finding_id}` — {f.title} ({f.severity.value})")
+                    ai_info = getattr(f, "ai_triage", None) or {}
+                    prio_badge = f" [Priority: {ai_info.get('recommended_priority', '-')}]" if ai_info else ""
+                    st.markdown(f"- **[{f.finding_tier.label}]** `{f.finding_id}` — {f.title} ({f.severity.value}){prio_badge}")
 
     # -------------------------------------------------------------
-    # TAB 3: Finding Review & Human Sign-Off
+    # TAB 3: AI Triage & Analysis (Phase 4)
+    # -------------------------------------------------------------
+    with tab_triage:
+        st.subheader("🤖 AI-Assisted Finding Triage & Analysis")
+        st.caption(
+            "Evidence-grounded triage: Explains findings in plain English, identifies false positives, "
+            "prioritizes manual investigation, and detects semantic duplicates."
+        )
+
+        with st.expander("⚙️ AI Provider & Consent Configuration", expanded=False):
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                provider_choice = st.selectbox(
+                    "AI Provider:",
+                    ["mock", "openai", "anthropic", "gemini", "local"],
+                    index=["mock", "openai", "anthropic", "gemini", "local"].index(st.session_state.ai_config.provider_type),
+                    help="Select the language model provider. 'mock' runs offline without API keys.",
+                )
+                api_key_input = st.text_input(
+                    "API Key (Optional / Environment Overridable):",
+                    type="password",
+                    value=st.session_state.ai_config.api_key or "",
+                    help="Never committed or hardcoded. Can also be set via OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY.",
+                )
+            with col_p2:
+                model_name_input = st.text_input(
+                    "Model Name (Optional):",
+                    value=st.session_state.ai_config.model_name or "",
+                    placeholder="e.g. gpt-4o-mini, claude-3-haiku-20240307, gemini-1.5-flash",
+                )
+                endpoint_url_input = st.text_input(
+                    "Local Endpoint URL (Local Provider Only):",
+                    value=st.session_state.ai_config.endpoint_url or "http://127.0.0.1:11434/v1/chat/completions",
+                )
+
+            consent_checkbox = st.checkbox(
+                "🔒 I explicitly consent to transmitting sanitized finding data to external AI providers (Required for OpenAI / Anthropic / Gemini).",
+                value=st.session_state.ai_config.consent_given,
+            )
+
+            if st.button("Save AI Configuration"):
+                st.session_state.ai_config.provider_type = provider_choice
+                st.session_state.ai_config.api_key = api_key_input or None
+                st.session_state.ai_config.model_name = model_name_input or None
+                st.session_state.ai_config.endpoint_url = endpoint_url_input or None
+                st.session_state.ai_config.consent_given = consent_checkbox
+                st.success("AI Provider configuration saved!")
+                st.rerun()
+
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            if st.button("🚀 Run AI Triage on All Findings", type="primary", use_container_width=True):
+                if not st.session_state.findings:
+                    st.warning("No findings loaded to triage. Run an audit first.")
+                else:
+                    try:
+                        ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
+                        with st.spinner("Analyzing findings and grounding evidence..."):
+                            ai_service.triage_all(st.session_state.findings, source_transaction=st.session_state.current_transaction)
+                        st.success(f"Successfully generated AI triage across {len(st.session_state.findings)} findings!")
+                        st.rerun()
+                    except ConsentRequiredError as cre:
+                        st.error(f"Consent Required: {cre}")
+
+        with col_t2:
+            if st.button("🔍 Detect Semantic Duplicates", use_container_width=True):
+                if not st.session_state.findings:
+                    st.warning("No findings available for duplicate detection.")
+                else:
+                    ai_service = AIService(st.session_state.ai_config, fallback_to_mock=True)
+                    st.session_state.ai_duplicates = ai_service.detect_duplicates(st.session_state.findings)
+                    if st.session_state.ai_duplicates:
+                        st.info(f"Identified {len(st.session_state.ai_duplicates)} potential duplicate pair(s).")
+                    else:
+                        st.success("No semantic duplicates found across active findings.")
+
+        # Display Semantic Duplicate Review Section
+        if st.session_state.ai_duplicates:
+            st.markdown("### 👥 Suggested Semantic Duplicates (Human Review Required)")
+            st.caption("AI identifies potential duplicates based on root cause similarity. Review and approve before merging.")
+
+            for d_idx, sug in enumerate(st.session_state.ai_duplicates):
+                with st.container():
+                    st.markdown(f"#### Suggestion `{sug.suggestion_id}`: Similarity `{sug.similarity_score * 100:.0f}%`")
+                    st.write(f"**Primary Finding:** `{sug.primary_finding_id}` &nbsp;|&nbsp; **Duplicate Finding:** `{sug.duplicate_finding_id}`")
+                    st.write(f"**Shared Root Cause:** {sug.shared_root_cause}")
+                    st.info(f"**Rationale:** {sug.similarity_rationale}")
+
+                    if not sug.is_approved:
+                        col_m1, col_m2 = st.columns([1, 4])
+                        with col_m1:
+                            if st.button("Approve & Merge", key=f"app_merge_{d_idx}", type="primary"):
+                                primary = next((f for f in st.session_state.findings if f.finding_id == sug.primary_finding_id), None)
+                                dup = next((f for f in st.session_state.findings if f.finding_id == sug.duplicate_finding_id), None)
+                                if primary and dup and primary != dup:
+                                    AIService.approve_duplicate(sug, reviewer="Security Auditor")
+                                    AIService.merge_duplicates(primary, dup)
+                                    st.session_state.findings.remove(dup)
+                                    st.session_state.ai_duplicates.remove(sug)
+                                    st.success(f"Merged `{sug.duplicate_finding_id}` into `{sug.primary_finding_id}`! All URLs and evidence preserved.")
+                                    st.rerun()
+                        with col_m2:
+                            if st.button("Keep Separate", key=f"rej_merge_{d_idx}"):
+                                st.session_state.ai_duplicates.remove(sug)
+                                st.rerun()
+                    st.markdown("---")
+
+        # Display Finding Triage Cards
+        if not st.session_state.findings:
+            st.info("No findings available to display.")
+        else:
+            st.markdown("### 📋 Evidence-Grounded Finding Triages")
+            for idx, f in enumerate(st.session_state.findings):
+                ai_data = getattr(f, "ai_triage", None)
+                prio_str = ai_data.get("recommended_priority", "MEDIUM") if ai_data else "-"
+                
+                header_title = f"[{f.severity.value}] [Priority: {prio_str}] [{f.finding_tier.label}] {f.title} ({f.finding_id})"
+                with st.expander(header_title, expanded=(idx == 0)):
+                    if not ai_data:
+                        st.info("AI triage has not been executed for this finding yet. Click 'Run AI Triage on All Findings' above.")
+                    else:
+                        st.markdown(f"<div class='ai-box'><b>Plain-English Summary:</b> {ai_data['plain_english_explanation']}</div>", unsafe_allow_html=True)
+
+                        col_ev1, col_ev2 = st.columns(2)
+                        with col_ev1:
+                            st.markdown("#### 🔬 Observed Evidence")
+                            st.code(ai_data["observed_evidence"], language="text")
+                            st.markdown("#### 💥 Realistic Potential Impact")
+                            st.write(ai_data["realistic_potential_impact"])
+                        with col_ev2:
+                            st.markdown("#### 🛡️ Why Evidence Matters")
+                            st.write(ai_data["why_evidence_matters"])
+                            st.markdown("#### 🔍 Alternative Explanations")
+                            st.write(ai_data["alternative_explanations"])
+
+                        # Missing information & Verification Alert
+                        if ai_data.get("needs_manual_verification"):
+                            st.warning(f"⚠️ **Verification Required:** {ai_data.get('missing_information', 'Needs manual verification')}")
+                        else:
+                            st.success(f"✅ **Evidence Verified:** {ai_data.get('missing_information', 'Sufficient evidence provided.')}")
+
+                        # False positive assessment
+                        if ai_data.get("potential_false_positive"):
+                            st.error(f"🚩 **Potential False Positive Flag:** {ai_data.get('false_positive_explanation')}")
+                        else:
+                            st.info("✅ **Low False Positive Risk:** Deterministic signature correlates directly with verified technical condition.")
+
+                        # Recommended next steps
+                        st.markdown("#### 🎯 Recommended Manual Verification Steps")
+                        for step in ai_data.get("recommended_next_steps", []):
+                            st.markdown(f"- {step}")
+
+                        # Remediation
+                        st.markdown("#### 🛠️ Suggested Defensive Remediation")
+                        st.markdown(ai_data["suggested_remediation"])
+
+                        # Distinct Concept Rationales
+                        st.markdown("---")
+                        col_r1, col_r2, col_r3 = st.columns(3)
+                        col_r1.markdown(f"**Confidence ({f.confidence.value}):**\n\n{ai_data['confidence_rationale']}")
+                        col_r2.markdown(f"**Severity ({f.severity.value}):**\n\n{ai_data['severity_rationale']}")
+                        col_r3.markdown(f"**Priority ({ai_data['recommended_priority']}):**\n\n{ai_data['recommended_priority_rationale']}")
+
+    # -------------------------------------------------------------
+    # TAB 4: Finding Review & Human Sign-Off
     # -------------------------------------------------------------
     with tab_review:
         st.subheader("📋 Finding Review & Human Verification Screen")
@@ -316,11 +561,15 @@ def main():
                     FindingTier.OBSERVATION: "badge-observation",
                 }.get(f.finding_tier, "badge-observation")
 
-                header_str = f"[{f.severity.value}] [{f.finding_tier.label}] {f.title} ({f.finding_id})"
+                ai_d = getattr(f, "ai_triage", None) or {}
+                prio_str = ai_d.get("recommended_priority", "-")
+
+                header_str = f"[{f.severity.value}] [Priority: {prio_str}] [{f.finding_tier.label}] {f.title} ({f.finding_id})"
                 with st.expander(header_str, expanded=(not f.human_reviewed)):
                     st.markdown(
                         f"<span class='{tier_badge_class}'>{f.finding_tier.label}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
                         f"**Severity:** `{f.severity.value}` &nbsp;&nbsp;|&nbsp;&nbsp; "
+                        f"**AI Priority:** `{prio_str}` &nbsp;&nbsp;|&nbsp;&nbsp; "
                         f"**Confidence:** `{f.confidence.value}` &nbsp;&nbsp;|&nbsp;&nbsp; "
                         f"**Human Status:** {'✅ Verified' if f.human_reviewed else '⏳ Pending Review'}",
                         unsafe_allow_html=True
@@ -364,7 +613,7 @@ def main():
                             st.rerun()
 
     # -------------------------------------------------------------
-    # TAB 4: Program Policy Manager
+    # TAB 5: Program Policy Manager
     # -------------------------------------------------------------
     with tab_policy:
         st.subheader("📜 Vulnerability Disclosure Program Policy Manager")
@@ -419,7 +668,7 @@ def main():
                 st.markdown("---")
 
     # -------------------------------------------------------------
-    # TAB 5: Export Verified Reports
+    # TAB 6: Export Verified Reports
     # -------------------------------------------------------------
     with tab_export:
         st.subheader("💾 Export Verified Assessment Reports")
@@ -446,7 +695,7 @@ def main():
                 mime="text/markdown",
                 use_container_width=True,
             )
-            st.caption("Full report with executive summary, tier breakdown, reproduction steps, and auditor sign-off.")
+            st.caption("Full report with executive summary, tier breakdown, AI triage, and auditor sign-off.")
 
         json_content = JSONReporter.generate(findings_to_export, st.session_state.target_url)
         with col_json:
@@ -457,7 +706,7 @@ def main():
                 mime="application/json",
                 use_container_width=True,
             )
-            st.caption("Structured JSON with verification tiers, reproduction steps, and review metadata.")
+            st.caption("Structured JSON with verification tiers, AI triage analysis, and review metadata.")
 
         csv_content = CSVReporter.generate(findings_to_export)
         with col_csv:
@@ -468,7 +717,7 @@ def main():
                 mime="text/csv",
                 use_container_width=True,
             )
-            st.caption("Spreadsheet-ready CSV table including finding tiers, review status, and sanitized evidence.")
+            st.caption("Spreadsheet-ready CSV table including finding tiers, AI priorities, and review status.")
 
         with st.expander("👁️ Preview Generated Markdown Report"):
             st.markdown(md_content)

@@ -21,6 +21,7 @@ from appsec_assistant.knowledge_base import VulnerabilityKnowledgeBase
 from appsec_assistant.reporters.markdown_reporter import MarkdownReporter
 from appsec_assistant.reporters.json_reporter import JSONReporter
 from appsec_assistant.lab_server import LocalLabServer
+from appsec_assistant.ai import AIService, AIProviderConfig, ConsentRequiredError
 
 console = Console()
 
@@ -41,10 +42,11 @@ def display_findings_table(findings: List[VulnerabilityFinding]) -> None:
         console.print("[green]✔ No security weaknesses found.[/green]")
         return
 
-    table = Table(title="Security Assessment Findings (Phase 3 Controlled Workflow)", border_style="cyan")
+    table = Table(title="Security Assessment Findings (Phase 4 AI-Assisted Workflow)", border_style="cyan")
     table.add_column("ID", style="dim", width=14)
     table.add_column("Tier", width=14)
     table.add_column("Severity", width=10)
+    table.add_column("Priority", width=10)
     table.add_column("Confidence", width=12)
     table.add_column("Title", style="bold")
     table.add_column("Category", style="cyan")
@@ -77,12 +79,24 @@ def display_findings_table(findings: List[VulnerabilityFinding]) -> None:
             "INDEPENDENTLY_VERIFIED": "[bold green]Verified[/bold green]",
         }.get(getattr(f.finding_tier, "value", "SUSPECTED_VULNERABILITY"), "Suspected")
 
+        ai_data = getattr(f, "ai_triage", None) or {}
+        prio_val = ai_data.get("recommended_priority", "-")
+        prio_style = {
+            "CRITICAL": "[bold red]CRITICAL[/bold red]",
+            "HIGH": "[red]HIGH[/red]",
+            "MEDIUM": "[yellow]MEDIUM[/yellow]",
+            "LOW": "[green]LOW[/green]",
+            "INFO": "[blue]INFO[/blue]",
+            "-": "[dim]-[/dim]",
+        }.get(prio_val, prio_val)
+
         hr_str = "[green]YES[/green]" if getattr(f, "human_reviewed", False) else "[dim]NO[/dim]"
 
         table.add_row(
             f.finding_id,
             tier_style,
             sev_style,
+            prio_style,
             conf_style,
             f.title,
             f.category,
@@ -125,6 +139,18 @@ def display_finding_detail(f: VulnerabilityFinding) -> None:
 
 ### Remediation Guidance
 {f.remediation}
+"""
+    ai_data = getattr(f, "ai_triage", None)
+    if ai_data:
+        content += f"""
+### 🤖 AI-Assisted Triage ({ai_data.get('provider_name', 'mock')})
+- **Recommended Priority:** **`{ai_data.get('recommended_priority', 'MEDIUM')}`** — {ai_data.get('recommended_priority_rationale', '')}
+- **Plain-English Explanation:** {ai_data.get('plain_english_explanation', '')}
+- **Why Evidence Matters:** {ai_data.get('why_evidence_matters', '')}
+- **Realistic Potential Impact:** {ai_data.get('realistic_potential_impact', '')}
+- **Alternative Explanations:** {ai_data.get('alternative_explanations', '')}
+- **Missing Information / Verification Needs:** {ai_data.get('missing_information', '')}
+- **Potential False Positive:** {'⚠️ Likely False Positive: ' + ai_data.get('false_positive_explanation', '') if ai_data.get('potential_false_positive') else '✅ Low False Positive Risk'}
 """
     console.print(Panel(Markdown(content), title=f"[bold]{f.title}[/bold]", border_style="cyan"))
 
@@ -306,6 +332,10 @@ def main() -> None:
     parser.add_argument("--exercises", action="store_true", help="List available guided security exercises")
     parser.add_argument("--run-exercise", help="Execute a specific guided exercise by ID (e.g. EX-AC-01, EX-IDOR-01)")
     parser.add_argument("--review-all", action="store_true", help="Mark all generated findings as human-reviewed before export")
+    parser.add_argument("--ai-triage", action="store_true", help="Run AI-assisted triage analysis on findings")
+    parser.add_argument("--ai-provider", default="mock", choices=["mock", "openai", "anthropic", "gemini", "local"], help="AI provider for triage (default: mock)")
+    parser.add_argument("--ai-duplicates", action="store_true", help="Detect semantic duplicates across findings")
+    parser.add_argument("--ai-consent", action="store_true", help="Explicit user consent to transmit data to external AI provider")
 
     args = parser.parse_args()
 
@@ -402,6 +432,45 @@ def main() -> None:
 
         endpoints = ["/", "/api/Users/1", "/rest/basket/1", "/admin", "/hardened"]
         engine.run_suite(endpoints)
+
+        if args.ai_triage or args.ai_duplicates:
+            try:
+                ai_cfg = AIProviderConfig(
+                    provider_type=args.ai_provider,
+                    consent_given=args.ai_consent,
+                )
+                ai_service = AIService(ai_cfg, fallback_to_mock=True)
+
+                if args.ai_triage:
+                    console.print(f"[cyan]Running AI-assisted triage with provider '{args.ai_provider}'...[/cyan]")
+                    ai_service.triage_all(engine.findings)
+                    console.print(f"[green]✔ AI triage complete across {len(engine.findings)} findings.[/green]")
+
+                if args.ai_duplicates:
+                    console.print("[cyan]Analyzing findings for semantic duplicates...[/cyan]")
+                    dups = ai_service.detect_duplicates(engine.findings)
+                    if dups:
+                        console.print(f"[bold yellow]Identified {len(dups)} Suggested Duplicate Pairs (Pending Review):[/bold yellow]")
+                        dup_table = Table(border_style="yellow")
+                        dup_table.add_column("Suggestion ID", style="bold")
+                        dup_table.add_column("Primary ID")
+                        dup_table.add_column("Duplicate ID")
+                        dup_table.add_column("Score", width=8)
+                        dup_table.add_column("Rationale")
+                        for d in dups:
+                            dup_table.add_row(
+                                d.suggestion_id,
+                                d.primary_finding_id,
+                                d.duplicate_finding_id,
+                                f"{d.similarity_score:.2f}",
+                                d.similarity_rationale[:60] + "..."
+                            )
+                        console.print(dup_table)
+                    else:
+                        console.print("[green]✔ No semantic duplicate findings detected.[/green]")
+            except ConsentRequiredError as cre:
+                console.print(f"[bold red]✖ AI Error: {cre}[/bold red]")
+                sys.exit(1)
 
         if args.review_all:
             import datetime

@@ -151,6 +151,7 @@ class VulnerabilityFinding:
     timestamp: str = field(
         default_factory=lambda: datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     )
+    ai_triage: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if not self.affected_urls and self.target_url:
@@ -191,6 +192,7 @@ class VulnerabilityFinding:
             "review_notes": self.review_notes,
             "references": self.references,
             "timestamp": self.timestamp,
+            "ai_triage": self.ai_triage,
         }
 
 

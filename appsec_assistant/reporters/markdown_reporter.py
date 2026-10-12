@@ -169,6 +169,20 @@ class MarkdownReporter:
                     f.remediation,
                     "",
                 ])
+                ai_data = getattr(f, "ai_triage", None)
+                if ai_data:
+                    lines.extend([
+                        "#### 🤖 AI-Assisted Triage Analysis",
+                        f"- **Triage Provider:** `{ai_data.get('provider_name', 'mock')}` (Analyzed at {ai_data.get('analyzed_at', 'N/A')})",
+                        f"- **Plain-English Explanation:** {ai_data.get('plain_english_explanation', '')}",
+                        f"- **Why Evidence Matters:** {ai_data.get('why_evidence_matters', '')}",
+                        f"- **Realistic Potential Impact:** {ai_data.get('realistic_potential_impact', '')}",
+                        f"- **Alternative Explanations:** {ai_data.get('alternative_explanations', '')}",
+                        f"- **Missing Information:** {ai_data.get('missing_information', '')}",
+                        f"- **Recommended Review Priority:** **`{ai_data.get('recommended_priority', 'MEDIUM')}`** ({ai_data.get('recommended_priority_rationale', '')})",
+                        f"- **Potential False Positive:** {'⚠️ Likely False Positive: ' + ai_data.get('false_positive_explanation', '') if ai_data.get('potential_false_positive') else '✅ Low False Positive Risk'}",
+                        "",
+                    ])
                 if f.references:
                     lines.append("#### References & Security Standards")
                     for ref in f.references:

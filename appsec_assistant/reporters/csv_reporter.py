@@ -33,6 +33,9 @@ class CSVReporter:
         "impact",
         "remediation",
         "evidence",
+        "ai_priority",
+        "ai_explanation",
+        "ai_false_positive_risk",
         "timestamp",
     ]
 
@@ -45,6 +48,7 @@ class CSVReporter:
 
         for f in findings:
             repro_steps_str = "; ".join(getattr(f, "reproduction_steps", []))
+            ai_data = getattr(f, "ai_triage", None) or {}
             writer.writerow({
                 "finding_id": f.finding_id,
                 "severity": f.severity.value,
@@ -67,6 +71,9 @@ class CSVReporter:
                 "impact": f.impact,
                 "remediation": f.remediation,
                 "evidence": f.evidence,
+                "ai_priority": ai_data.get("recommended_priority", "N/A"),
+                "ai_explanation": ai_data.get("plain_english_explanation", "N/A"),
+                "ai_false_positive_risk": "YES" if ai_data.get("potential_false_positive") else "NO",
                 "timestamp": f.timestamp,
             })
 
